@@ -50,7 +50,7 @@ echo "Installing into $home"
 for m in $mods; do
   # the tests are for development, not for Herdr
   place "$here/mods/$m" "$home/mods/$m"
-  find "$home/mods/$m" -name '*.test.mjs' -delete
+  find "$home/mods/$m" \( -name '*.test.mjs' -o -name 'test_*' \) -delete
 done
 place "$here/layouts/$LAYOUT.json" "$home/layouts/$LAYOUT.json"
 

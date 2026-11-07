@@ -19,6 +19,8 @@ def entry(kind, label="", **extra):
         result["label"] = label
     if isinstance(extra.get("detail"), str):
         extra["detail"] = redact(extra["detail"][:MAX_TEXT])[:MAX_DETAIL]
+    if isinstance(extra.get("items"), list):
+        extra["items"] = [redact(item) if isinstance(item, str) else item for item in extra["items"]]
     result.update({key: value for key, value in extra.items() if value not in (None, "", [], 0)})
     return result
 

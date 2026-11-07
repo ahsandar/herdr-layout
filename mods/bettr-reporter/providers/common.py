@@ -92,7 +92,8 @@ def session(kind, event, **extra):
 def agent(kind, event, agent_id, outcome=None, **fields):
     """An agent event. Absent fields are dropped, so they never overwrite known values."""
     result = {**session(kind, event), "agent": short(agent_id, 200),
-              "fields": {key: value for key, value in fields.items() if value is not None and value != ""}}
+              # Names and descriptions are free text from the agent or the user: redact them like every other published text.
+              "fields": {key: redact(value) if isinstance(value, str) else value for key, value in fields.items() if value is not None and value != ""}}
     if outcome:
         result["outcome"] = outcome
     return result

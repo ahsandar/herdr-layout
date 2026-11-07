@@ -8,7 +8,7 @@ are listed so you can ask the authors, and so you can swap in a licensed version
 
 | Mods here | Original | Taken at commit | Changes made here |
 |---|---|---|---|
-| `bettr-activity`, `bettr-context`, `bettr-reporter` | [dissimulate/bettr](https://github.com/dissimulate/bettr) | `7a025db895473397ee63a74e9ea848b2059894e8` | none. Tests and `.md` docs left out. |
+| `bettr-activity`, `bettr-context`, `bettr-reporter` | [dissimulate/bettr](https://github.com/dissimulate/bettr) | `7a025db895473397ee63a74e9ea848b2059894e8` | `bettr-reporter` only: search patterns and every agent name/description are now run through `redact()` (`providers/classify.py` `entry`, `providers/common.py` `agent`), so credential-like text is masked before it is published as a label. Covers the Claude and Codex providers. Upstream's 54 tests still pass on the patched code; `test_redaction_patch.py` covers the patch. Upstream's own tests and `.md` docs are left out. |
 | `history`, `md-preview` | [plutotw/herdr-main-usage](https://github.com/plutotw/herdr-main-usage) | `ee244edf49da251c276d615abb614d29ffbb5ef0` | `history`: its tab polls only while open (`visible()` check in `main.js`), and `history.py` rewrites its cache file only when a transcript changed, and keeps `~/.cache/herdr-history` private (folder 0700, index file 0600; upstream leaves them world-readable). `md-preview`: none. |
 
 Icons: `activity.svg`, `gauge.svg` and the icons in `bettr-activity/icons` and `bettr-context/icons` are

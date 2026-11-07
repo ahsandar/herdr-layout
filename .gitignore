@@ -3,3 +3,5 @@ gpui-kit.d.ts
 jsconfig.json
 .DS_Store
 .remember/
+__pycache__/
+*.pyc
