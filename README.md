@@ -1,0 +1,157 @@
+# herdr-layout
+
+A [Herdr](https://herdr.dev) layout (`my-layout`) that turns the right-hand panel into a six-tab
+workbench: **Files**, **Changes**, **Graph**, **Activity**, **Context** and **History**. Each tab has its
+own button in the tab bar, and clicking the open one closes the panel again.
+
+It is Herdr's own `main` layout with only the right panel changed, so the spaces sidebar, agents list,
+pane cards and status bar are the ones you already know.
+
+This repo is also a backup: every mod is in `mods/`, so a fresh install needs nothing but this repo.
+
+## The tabs
+
+| Tab | What it does | Comes from |
+|---|---|---|
+| **Files** | File tree with git status marks. Opening a file shows it with syntax highlighting for the TIOBE top 50 languages (see below). Changed files get a **File / Diff** toggle. Markdown files are rendered, with **Preview / Source** chips and **↗** to open a live preview pane beside the terminal. | `my-files` + `md-preview` |
+| **Changes** | Uncommitted files with +/- counts, a syntax-highlighted diff for the selected file, and a commit box. | `my-changes` |
+| **Graph** | The repo's commit graph from [`git-graph`](https://github.com/mlange-42/git-graph), updated as commits and branches change. A **branch filter** picks one or more branches, with a **Local only** switch; the choice is remembered per folder. An `N uncommitted` badge shows working-tree changes. | `my-graph` |
+| **Activity** | What the focused agent has done: prompts, steps, replies and running sub-agents. | `bettr-activity` (from [bettr](https://github.com/dissimulate/bettr), see [THIRD_PARTY.md](THIRD_PARTY.md)) |
+| **Context** | How full the focused agent's context window is, split by kind, plus a prompt-cache overview. | `bettr-context` (from bettr) |
+| **History** | Past Claude Code, Codex and Pi sessions with search, transcripts and a **Resume** button that reopens a session in a new tab. | `history` (from [herdr-main-usage](https://github.com/plutotw/herdr-main-usage), patched) |
+
+Activity and Context only fill in once the agent hooks are installed (see [Install](#install)).
+
+### Syntax highlighting
+
+Diffs in Changes and non-native files in Files go through a small regex tokenizer
+(`mods/my-changes/highlight.js`, duplicated in `my-files`) with profiles for the TIOBE top 50 languages
+that have text source (Python, C, Java, C++, C#, JavaScript, R, SQL, Visual Basic, Go, Rust, PHP, Fortran,
+Perl, MATLAB, Assembly, Swift, Delphi/Pascal, Dart, VBScript, COBOL, ABAP, SAS, PL/SQL, Ada, Objective-C,
+Ruby, Prolog, Lua, Kotlin, OCaml, D, Lisp, Scala, Haskell, TypeScript, GML, ML, Xojo, FoxPro, XSLT,
+T-SQL, Solidity, Clojure, Julia, Elixir and more), plus shell, YAML, JSON, CSS and XML/HTML. Scratch,
+Ladder Logic and LabVIEW are skipped: they have no text source. Common languages in the Files tab use
+Herdr's native editor instead.
+
+Limits: it is a tokenizer, not a parser. Strings are single-line, regex literals and heredocs are not
+understood, `.m` is treated as Objective-C (MATLAB shares it) and `.pl` as Perl (Prolog uses `.pro`).
+
+## Requirements
+
+- Herdr **0.1.13** or later (`herdr-app` on `PATH`).
+- `git`, and `sh` for the installer.
+- [`git-graph`](https://github.com/mlange-42/git-graph) for the Graph tab: `cargo install git-graph`.
+  The mod also looks in `~/.cargo/bin` and `~/.asdf/installs/rust/*/bin`, because Herdr starts programs
+  with a different `PATH` than your shell.
+- `python3` for History and the hooks.
+- Claude Code (or Codex) for Activity, Context and History. Other agents appear in Herdr as usual.
+
+Built and used on Linux. macOS should work but is untested.
+
+## Install
+
+```sh
+git clone https://github.com/ahsandar/herdr-layout.git
+cd herdr-layout
+scripts/install.sh                 # layout + all mods, then herdr-app check on each
+herdr-app do layout.switch '{"name":"my-layout"}'
+```
+
+`ctrl-shift-l` switches back to your previous layout.
+
+Options:
+
+- `--update`: replace what is already installed. Old copies are moved to
+  `~/.config/herdr-app/.backups/herdr-layout-<time>/`, never deleted. Without it the installer refuses to
+  overwrite anything.
+- `--own-only`: install only Files, Changes, Graph and the tab bar; skip Activity, Context, History and
+  the Markdown pane.
+- `--hooks`: also install the agent hooks that feed Activity and Context. **Off by default**: it edits
+  `~/.claude/settings.json` (and `~/.codex/hooks.json`, if Codex is installed) and runs `python3` on agent
+  events. Equivalent: `python3 -I ~/.config/herdr-app/mods/bettr-reporter/setup.py install`. Hooks load
+  when an agent session starts or resumes.
+- `HERDR_APP_HOME=/some/folder` installs somewhere other than `~/.config/herdr-app`.
+
+### Uninstall
+
+Switch to another layout, then delete `layouts/my-layout.json` and the mods listed below from
+`~/.config/herdr-app/`. To remove the hooks, delete the `bettr-reporter` entries from
+`~/.claude/settings.json`.
+
+## What gets installed
+
+All of it is in this repo, under `mods/`. Nothing is downloaded.
+
+| Mod | Origin |
+|---|---|
+| `my-files` | clone of Herdr's `files` 0.1.13, plus highlighting, diff view and Markdown (mine) |
+| `my-changes` | clone of Herdr's `changes` 0.1.13, plus highlighting (mine) |
+| `my-graph` | new (mine) |
+| `my-tabs` | clone of Herdr's `tabs` 0.1.13, plus the Graph, Activity, Context and History buttons (mine) |
+| `bettr-activity`, `bettr-context`, `bettr-reporter` | [dissimulate/bettr](https://github.com/dissimulate/bettr), unchanged |
+| `history`, `md-preview` | [plutotw/herdr-main-usage](https://github.com/plutotw/herdr-main-usage); `history` has a small patch |
+
+Folder names must stay `bettr-*`: the hooks call the reporter by folder name. Sources, pinned commits,
+what was changed, and licensing notes for the third-party mods are in [THIRD_PARTY.md](THIRD_PARTY.md).
+`history` as upstream ships it polls every 20 seconds even while its tab is closed; the copy here polls
+only while the tab is open and stops rewriting its cache file when nothing changed.
+
+## What the mods run and read
+
+None of the mods use the network, except that **Markdown links you click** (`http`, `https`, `mailto`)
+open in your browser through `xdg-open` / `open`.
+
+| Mod | Runs | Reads / writes |
+|---|---|---|
+| Files, Changes | `git`, `sh` | the focused pane's folder |
+| Graph | `git`, `git-graph`, `sh` | the focused pane's repo; remembers the branch choice in the mod's `localStorage` |
+| Activity, Context | nothing | terminal labels published by the reporter |
+| reporter (only with `--hooks`) | `python3` and `hc label` from agent hooks | agent transcripts (read), `~/.cache/bettr/` (state). It stores the first line of prompts, file paths, commands and replies; credential-like values are masked. |
+| History | `python3 history.py` | agent transcripts in `~/.claude`, `~/.codex`, `~/.pi` (read), `~/.cache/herdr-history/index.json` (cache). Resume runs `claude --resume`, `codex resume` or `pi --session`. |
+
+## Layout
+
+`layouts/my-layout.json` is Herdr's `main` layout with the right panel changed: `tabs` → `my-tabs`, and
+the panel's `panel-body` stack has six children in this order: `files`, `changes`, `graph`, `activity`,
+`context`, `history`. Everything else is stock, so it follows Herdr's theme and your `settings.json`.
+Per-space panel memory comes from the stock tab bar logic, so each space reopens its own panel.
+
+## Backing up changes
+
+After editing the layout or mods in Herdr, copy them back into this repo and commit:
+
+```sh
+scripts/backup.sh          # live ~/.config/herdr-app -> this repo (layout + all mods)
+git add -A && git commit -m "..." && git push
+```
+
+`gpui-kit.d.ts` and `jsconfig.json` in each mod folder are written by Herdr itself and are not stored.
+
+## Tests
+
+Plain Node, no dependencies. Each stubs Herdr's UI imports and exercises the pure logic:
+
+```sh
+node mods/my-changes/highlight.test.mjs   # tokenizer, diff rows, truncation, CRLF
+node mods/my-files/files.test.mjs         # Markdown link resolution
+node mods/my-graph/graph.test.mjs         # ANSI colours, branch parsing, git-graph arguments
+```
+
+Run `herdr-app check mods/<name>` after any change; `herdr-app status` should show no errors.
+
+## Known limits
+
+- The Graph tab shows the latest 500 commits and polls every 3 seconds, only while the tab is open.
+- `git-graph` ignores branch names unless a model is set, so a filtered graph always uses its `simple`
+  model; an unfiltered graph uses your repo's own model.
+- The Files tab does not reload an open file when it changes on disk (use **↗** for a live Markdown
+  preview); the Diff view does refresh.
+- Activity, Context and History follow Claude Code, Codex and Pi transcripts and hooks, which are not
+  stable APIs and may change.
+
+## Licence
+
+The code in `mods/my-*` and `scripts/` is MIT (see `LICENSE`). `my-files`, `my-changes` and `my-tabs`
+are derived from Herdr's shipped mods and keep whatever terms those carry. The other mods are other
+people's work, copied with credit and no licence grant from their authors: see
+[THIRD_PARTY.md](THIRD_PARTY.md).

@@ -1,0 +1,5 @@
+# Herdr writes these into every mod folder itself
+gpui-kit.d.ts
+jsconfig.json
+.DS_Store
+.remember/
