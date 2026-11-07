@@ -303,9 +303,12 @@ def cmd_list():
     try:
         if fresh == files:
             raise OSError  # nothing changed: leave the file alone
-        os.makedirs(os.path.dirname(CACHE), exist_ok=True)
+        # The index holds prompt titles and folders: keep it private to this user.
+        folder = os.path.dirname(CACHE)
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+        os.chmod(folder, 0o700)
         tmp = CACHE + ".tmp"
-        with open(tmp, "w") as f:
+        with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
             json.dump({"v": CACHE_VERSION, "files": fresh}, f)
         os.replace(tmp, CACHE)
     except OSError:
