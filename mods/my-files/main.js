@@ -116,11 +116,22 @@ export default class Files extends View {
             marks[`${top.stdout.trim()}/${entry.slice(3)}`] = xy === "??" || xy.includes("A") ? "A" : xy.includes("U") ? "U" : xy.includes("D") ? "D" : "M";
           }
         }
+        // A collapsed folder shows a dot when something under it changed.
+        for (const p of Object.keys(marks)) for (let d = p.lastIndexOf("/"); d > cwd.length; d = p.lastIndexOf("/", d - 1)) marks[p.slice(0, d)] ??= "•";
         if (!this.current(context)) return;
         this.marks = marks; this.error = null; this.watch(cwd, cx);
       } catch (e) { if (this.current(context)) this.error = String(e); }
-      finally { if (this.context === context) { this.loading = false; this.names = null; } if (this.view === "diff" && this.file && this.current(context)) this.showDiff(cx); cx.notify(); }
+      finally { if (this.context === context) { this.loading = false; this.names = null; } if (this.view === "diff" && this.file && this.current(context)) this.showDiff(cx); else if (this.view === "file" && this.file && this.current(context)) this.reloadFile(cx); cx.notify(); }
     });
+  }
+
+  // The agent edits the open file: show the new text, only when it differs.
+  async reloadFile(cx) {
+    const path = this.file, context = this.context;
+    try {
+      const text = await readTextFile(`${this.root}/${path}`, { on: this.on });
+      if (this.file === path && this.current(context) && text !== null && this.text !== null && text !== this.text) this.show(path, cx);
+    } catch { /* keep the text on screen */ }
   }
 
   toggle(path, cx) {
