@@ -1,7 +1,8 @@
 // A lazy file browser for the focused pane's folder, with bounded read-only previews.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState, TextView, VirtualListScrollHandle } from "gpui-base";
-import { READ, profileFor, editorLang, fileRows, diffRows, addedLines, codeView, rowTexts } from "./highlight.js";
+import { READ, profileFor, editorLang, fileRows, diffRows, addedLines, codeView, rowTexts, statusColor, visible } from "./highlight.js";
+import { parseNumstat, rollup } from "./rollup.js";
 import { Finder, findInLines, splitSpans, fuzzyRank, contentArgs, parseHits, parseFileList, FILE_LIST_SCRIPT } from "./search.js";
 import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window, run, shared } from "herdr";
 
@@ -60,7 +61,7 @@ export default class Files extends View {
     this.reqSeen = shared("search.open")?.n;
     this.entries = new Map(); this.folders = new Set(); this.pending = new Set(); this.marks = {};
     this.refresh(cx);
-    cx.timer.every(10000, cx => this.refresh(cx));
+    cx.timer.every(10000, cx => visible("files") && this.refresh(cx));
   }
 
   watch(root, cx) {
@@ -68,7 +69,7 @@ export default class Files extends View {
     this.watched = root;
     const context = this.context;
     cx.spawn(async cx => {
-      try { while (this.context === context) { await watchFolder(root); if (this.current(context)) this.refresh(cx); } }
+      try { while (this.context === context) { await watchFolder(root); if (this.current(context) && visible("files")) this.refresh(cx); } }
       catch { if (this.context === context) this.watched = null; }
     });
   }
@@ -117,15 +118,9 @@ export default class Files extends View {
           }
           // shortcut: no counts before the first commit (no HEAD), when that matters diff --cached too.
           const numstat = await exec("git", ["--no-optional-locks", "diff", "HEAD", "--numstat", "-z", "--no-renames"], { cwd, on }).catch(() => null);
-          if (numstat?.code === 0) for (const entry of numstat.stdout.split("\0")) {
-            const [a, d, ...rest] = entry.split("\t");
-            if (rest.length && a !== "-") counts[`${top.stdout.trim()}/${rest.join("\t")}`] = [Number(a) || 0, Number(d) || 0];
-          }
+          if (numstat?.code === 0) Object.assign(counts, parseNumstat(numstat.stdout, top.stdout.trim()));
         }
-        // A collapsed folder shows a dot when something under it changed.
-        for (const p of Object.keys(marks)) for (let d = p.lastIndexOf("/"); d > cwd.length; d = p.lastIndexOf("/", d - 1)) marks[p.slice(0, d)] ??= "•";
-        // Folders add up the counts of what is under them.
-        for (const [p, [a, d]] of Object.entries({ ...counts })) for (let i = p.lastIndexOf("/"); i > cwd.length; i = p.lastIndexOf("/", i - 1)) { const k = p.slice(0, i), c = counts[k] ?? [0, 0]; counts[k] = [c[0] + a, c[1] + d]; }
+        rollup(marks, counts, cwd);
         if (!this.current(context)) return;
         this.marks = marks; this.counts = counts; this.error = null; this.watch(cwd, cx);
       } catch (e) { if (this.current(context)) this.error = String(e); }
@@ -135,10 +130,12 @@ export default class Files extends View {
 
   // The agent edits the open file: show the new text, only when it differs.
   async reloadFile(cx) {
+    // Not for files past the display cap: re-reading them every refresh costs more than it shows.
+    if (this.text === null || this.text.length > 400000) return;
     const path = this.file, context = this.context;
     try {
       const text = await readTextFile(`${this.root}/${path}`, { on: this.on });
-      if (this.file === path && this.current(context) && text !== null && this.text !== null && text !== this.text) this.show(path, cx);
+      if (this.file === path && this.view === "file" && this.current(context) && text !== null && this.text !== null && text !== this.text) this.show(path, cx);
     } catch { /* keep the text on screen */ }
   }
 
@@ -357,7 +354,7 @@ export default class Files extends View {
     for (const entry of this.entries.get(prefix) ?? []) {
       if (out.length >= TOTAL) break;
       const path = prefix ? `${prefix}/${entry.name}` : entry.name, open = this.folders.has(path), mark = this.marks[`${this.root}/${path}`], count = this.counts?.[`${this.root}/${path}`];
-      const color = mark === "A" ? t.ansi2 : mark === "D" || mark === "U" ? t.ansi1 : t.ansi3;
+      const color = statusColor(mark, t);
       out.push(h_flex().id(`file-${path}`).h(28).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer().hover(s => s.bg(t.hover))
         .on_click((_e, cx) => entry.dir ? this.toggle(path, cx) : this.show(path, cx))
         .child(entry.dir ? svg(`mods/my-files/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
@@ -372,7 +369,10 @@ export default class Files extends View {
   }
 
   render(cx) {
-    if (key() !== this.context?.key) this.refresh(cx);
+    // Hidden, the timer and folder watch skip git; showing the tab refreshes at once.
+    const shown = visible("files");
+    if ((shown && !this.wasShown) || key() !== this.context?.key) this.refresh(cx);
+    this.wasShown = shown;
     // The search key (my-tabs) names the open panel; only that panel opens its bar.
     // Opening a bar notifies, which render may not do: so it runs from a timer.
     const req = shared("search.open");

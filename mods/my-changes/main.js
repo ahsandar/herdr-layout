@@ -1,6 +1,6 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, VirtualListScrollHandle } from "gpui-base";
-import { READ, diffRows, codeView, rowTexts } from "./highlight.js";
+import { READ, diffRows, codeView, rowTexts, statusColor, visible } from "./highlight.js";
 import { Finder, findInLines, fuzzyRank } from "./search.js";
 import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, shared } from "herdr";
 
@@ -29,7 +29,7 @@ export default class Changes extends View {
     this.input.on("focus", (_e, cx) => { this.typing = true; cx.notify(); });
     this.input.on("blur", (_e, cx) => { this.typing = false; cx.notify(); });
     this.refresh(cx);
-    cx.timer.every(10000, (cx) => this.refresh(cx));
+    cx.timer.every(10000, (cx) => visible("changes") && this.refresh(cx));
   }
 
   watch(root, cx) {
@@ -39,7 +39,7 @@ export default class Changes extends View {
       try {
         while (this.watched === root) {
           await watchFolder(root);
-          if (this.watched === root) this.refresh(cx);
+          if (this.watched === root && visible("changes")) this.refresh(cx);
         }
       } catch { this.watched = null; }
     });
@@ -162,7 +162,10 @@ export default class Changes extends View {
   }
 
   render(cx) {
-    if (key() !== this.context) this.refresh(cx);
+    // Hidden, the timer and folder watch skip git; showing the tab refreshes at once.
+    const shown = visible("changes");
+    if ((shown && !this.wasShown) || key() !== this.context) this.refresh(cx);
+    this.wasShown = shown;
     const t = theme(), add = this.files.reduce((n, f) => n + f.add, 0), del = this.files.reduce((n, f) => n + f.del, 0);
     const enabled = Boolean(this.message.trim() && this.root && !this.busy && !this.loading);
     // The search key (my-tabs) names the open panel; only that panel opens its bar.
@@ -188,7 +191,7 @@ export default class Changes extends View {
       .when(f.open, (el) => el.child(f.bar(t, { nav: diffMode, options: diffMode, trailing: !diffMode && q ? div().text_size(11).text_color(t.dim).child(`${files.length}/${this.files.length} files`) : null })))
       .child(v_flex().id("changes-list").flex_none().h(Math.min(200, Math.max(44, files.length * 28 + 12))).overflow_y_scrollbar().p(6).border_b(1).border_color(t.border).children(files.map((f) => {
         const parts = f.path.split("/"), name = parts.pop();
-        const color = f.status === "A" ? t.ansi2 : f.status === "M" ? t.ansi3 : t.ansi1; // same as the Files tab
+        const color = statusColor(f.status, t);
         return h_flex().id(`change-${f.path}`).h(28).flex_none().px(8).gap(8).items_center().rounded(7).cursor_pointer().when(this.open === f.path, (e) => e.bg(t.selected)).hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.pick(f.path, cx))
           .child(div().w(14).text_size(11).text_color(color).child(f.status))
           .child(h_flex().flex_1().min_w(0).child(div().text_color(t.dim).truncate().child(parts.length ? parts.join("/") + "/" : "")).child(div().max_w(260).min_w(0).truncate().text_color(color).child(name)))

@@ -166,6 +166,7 @@ Plain Node, no dependencies. Each stubs Herdr's UI imports and exercises the pur
 ```sh
 node mods/my-changes/highlight.test.mjs   # tokenizer, diff rows, truncation, CRLF
 node mods/my-files/files.test.mjs         # Markdown link resolution
+node mods/my-files/rollup.test.mjs        # folder marks and +/- totals
 node mods/my-graph/graph.test.mjs         # ANSI colours, branch parsing, git-graph arguments
 node mods/my-changes/search.test.mjs      # matching, fuzzy names, rg/grep scripts (run with and without ripgrep)
 ```

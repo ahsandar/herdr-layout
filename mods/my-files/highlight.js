@@ -5,6 +5,18 @@
 import { div } from "gpui-kit";
 import { h_flex, Scrollbar, v_virtual_list } from "gpui-base";
 import { splitSpans } from "./search.js";
+import { layout } from "herdr";
+
+// Status colour used by the Files and Changes lists: added green, deleted/conflicted red, anything else amber.
+export const statusColor = (mark, t) => (mark === "A" ? t.ansi2 : mark === "D" || mark === "U" ? t.ansi1 : t.ansi3);
+
+// False only when `child` sits in the side panel's stack and is not the open one. Timers keep running while a
+// panel is hidden, so they check this first. A layout without that stack counts as visible.
+const findNode = (n, id) => (n?.id === id ? n : (n?.children ?? []).reduce((hit, c) => hit ?? findNode(c, id), null));
+export function visible(child) {
+  const root = layout(), panel = findNode(root, "panel"), body = findNode(root, "panel-body");
+  return !(body && (panel?.hidden || body.active !== child));
+}
 
 export const READ = ["--literal-pathspecs", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "diff.autoRefreshIndex=false"];
 
