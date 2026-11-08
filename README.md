@@ -44,7 +44,7 @@ regular expressions.
 
 Content search uses [ripgrep](https://github.com/BurntSushi/ripgrep) when it is installed and plain `grep`
 otherwise; `.git` and ignored files are skipped (ripgrep) and binary files are never searched. It is local
-folders only, capped at 500 hits (5 per file, 1 MB per file, 10 seconds).
+folders only, capped at 500 hits (5 per file, 1 MB per file, 10 seconds), of which the first 200 are shown.
 
 It can also be driven from a script or a key binding, with a query or a JSON object:
 

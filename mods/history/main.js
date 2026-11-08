@@ -85,7 +85,7 @@ export default class History extends View {
   transcriptSearch(cx) {
     const q = this.query.trim(), seq = ++this.searchSeq;
     this.contentFiles = null;
-    if (q.length < 2) { cx.notify(); return; }
+    if (q.length < 2) { this.contentFiles = new Set(); cx.notify(); return; }
     cx.timer.after(300, (cx) => {
       if (seq !== this.searchSeq) return;
       cx.spawn(async (cx) => {
@@ -197,7 +197,7 @@ export default class History extends View {
     const here = this.scope === "here", counts = {};
     for (const s of this.sessions) if (this.scope === "all" || inside(s.cwd, this.root)) counts[s.agent] = (counts[s.agent] ?? 0) + 1;
     const present = Object.keys(AGENTS).filter((a) => counts[a]);
-    const empty = this.error || (this.content && this.query.trim() ? (this.contentFiles ? "No transcript contains that" : "Searching transcripts…") : this.loading && !this.sessions.length ? "Loading sessions…"
+    const empty = this.error || (this.content && this.query.trim() ? (this.query.trim().length < 2 ? "Type at least 2 characters" : this.contentFiles ? "No transcript contains that" : "Searching transcripts…") : this.loading && !this.sessions.length ? "Loading sessions…"
       : here && !this.root ? "No folder" : this.query ? "No matching sessions" : here ? "No sessions in this folder" : "No sessions");
     return v_flex().size_full().min_h(0)
       .child(this.header(t, [

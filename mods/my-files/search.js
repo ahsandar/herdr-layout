@@ -79,7 +79,7 @@ const FIND_RG = 'RG=$(command -v rg || { [ -x "$HOME/.cargo/bin/rg" ] && echo "$
 
 // Names of the files under the current folder, one per line, ignored files left out.
 export const FILE_LIST_SCRIPT = FIND_RG
-  + 'if [ -n "$RG" ]; then run "$RG" --files --hidden -g "!.git" 2>/dev/null | head -n 20001\n'
+  + 'if [ -n "$RG" ]; then run "$RG" --files --hidden -g "!.git" -g "!node_modules" 2>/dev/null | head -n 20001\n'
   + 'elif git rev-parse --is-inside-work-tree >/dev/null 2>&1; then run git ls-files -co --exclude-standard 2>/dev/null | head -n 20001\n'
   + "else run find . -type f -not -path '*/.git/*' -not -path '*/node_modules/*' 2>/dev/null | sed 's|^\\./||' | head -n 20001\nfi\n";
 
@@ -87,7 +87,7 @@ export const FILE_LIST_SCRIPT = FIND_RG
 export const CONTENT_SCRIPT = FIND_RG + 'q=$1; mode=$2; icase=$3\n'
   + 'if [ -n "$RG" ]; then\n'
   + '  fl=; [ "$mode" = F ] && fl=-F; ci=-s; [ "$icase" = i ] && ci=-i\n'
-  + '  run "$RG" --null --line-number --no-heading --with-filename --color never $fl $ci --hidden -g "!.git" --max-count 5 --max-columns 300 --max-columns-preview --max-filesize 1M -e "$q" . 2>/dev/null | head -n 600\n'
+  + '  run "$RG" --null --line-number --no-heading --with-filename --color never $fl $ci --hidden -g "!.git" -g "!node_modules" --max-count 5 --max-columns 300 --max-columns-preview --max-filesize 1M -e "$q" . 2>/dev/null | head -n 600\n'
   + 'else\n'
   + '  fl=-E; [ "$mode" = F ] && fl=-F; ci=; [ "$icase" = i ] && ci=-i\n'
   + '  run grep -rIn --null $fl $ci --exclude-dir=.git --exclude-dir=node_modules -m 5 -e "$q" . 2>/dev/null | head -n 600\nfi\n';

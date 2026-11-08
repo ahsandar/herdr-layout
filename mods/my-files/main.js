@@ -23,6 +23,7 @@ function resolveLink(file, target) {
   return out.join("/");
 }
 const PER_FOLDER = 500, TOTAL = 5000;
+const SHOWN = 200; // search hits drawn at once
 
 async function directory(path, on) {
   const windowsDirectory = async () => {
@@ -287,8 +288,9 @@ export default class Files extends View {
     cx.notify();
   }
 
+  // Search results: a plain list, capped at SHOWN rows (a virtual list drew nothing in this spot).
   resultsView(t) {
-    const f = this.tree, rows = [];
+    const f = this.tree, rows = [], hits = this.hits.slice(0, SHOWN);
     if (f.mode === "Name") for (const p of this.matchNames) {
       const i = p.lastIndexOf("/");
       rows.push(h_flex().id(`found-${p}`).h(26).flex_none().px(8).gap(7).items_center().rounded(6).cursor_pointer().hover(s => s.bg(t.hover)).on_click((_e, cx) => this.openHit(p, null, cx))
@@ -297,7 +299,7 @@ export default class Files extends View {
         .child(div().max_w(180).min_w(0).truncate().text_size(11).text_color(t.dim).child(i > 0 ? p.slice(0, i) : "")));
     } else {
       let last = null;
-      for (const h of this.hits) {
+      for (const h of hits) {
         if (h.path !== last) { last = h.path; rows.push(div().id(`hit-file-${h.path}`).flex_none().px(8).pt(8).pb(2).text_size(11).font_semibold().text_color(t.muted).truncate().child(h.path)); }
         rows.push(h_flex().id(`hit-${h.path}:${h.line}`).h(22).flex_none().pl(14).pr(8).gap(8).items_center().rounded(5).cursor_pointer().hover(s => s.bg(t.hover)).on_click((_e, cx) => this.openHit(h.path, h, cx))
           .child(div().w(34).flex_none().text_right().text_size(11).text_color(t.dim).child(String(h.line)))
@@ -306,6 +308,7 @@ export default class Files extends View {
     }
     return v_flex().id("files-results").flex_1().min_h(0).overflow_y_scrollbar().p(6)
       .children(rows)
+      .when(f.mode === "Content" && this.hits.length > SHOWN, el => el.child(div().p(8).text_size(11).text_color(t.dim).child(`Showing the first ${SHOWN} results: narrow the search to see the rest`)))
       .when(!rows.length, el => el.child(div().p(8).text_size(12).text_color(f.error ? t.ansi1 : t.dim).child(f.error ?? this.searchNote ?? (f.mode === "Name" && !this.names ? "Listing files…" : "No results"))));
   }
 
@@ -374,7 +377,7 @@ export default class Files extends View {
           ]);
         }))
       .when(!this.file && this.tree.open, el => el.child(this.tree.bar(t, { nav: false, options: this.tree.mode === "Content",
-        trailing: this.tree.query.trim() ? div().text_size(11).text_color(t.dim).child(this.tree.mode === "Name" ? `${this.matchNames.length} files` : this.hits.length ? `${this.hits.length}${this.hits.length >= 500 ? "+" : ""} results` : "") : null })))
+        trailing: this.tree.query.trim() ? div().text_size(11).text_color(t.dim).child(this.tree.mode === "Name" ? `${this.matchNames.length} files` : this.hits.length ? `${Math.min(this.hits.length, SHOWN)}${this.hits.length > SHOWN || this.hits.length >= 500 ? "+" : ""} results` : "") : null })))
       .when(Boolean(this.file) && this.within.open, el => el.child(this.within.bar(t)))
       .when(!this.file && this.tree.open && Boolean(this.tree.query.trim()), el => el.child(this.resultsView(t)))
       .when(!this.file && !(this.tree.open && this.tree.query.trim()), el => el.child(v_flex().id("files-tree").flex_1().min_h(0).overflow_y_scrollbar().p(6).children(this.rows("", 0, [], t))
