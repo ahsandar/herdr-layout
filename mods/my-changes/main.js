@@ -188,9 +188,10 @@ export default class Changes extends View {
       .when(f.open, (el) => el.child(f.bar(t, { nav: diffMode, options: diffMode, trailing: !diffMode && q ? div().text_size(11).text_color(t.dim).child(`${files.length}/${this.files.length} files`) : null })))
       .child(v_flex().id("changes-list").flex_none().h(Math.min(200, Math.max(44, files.length * 28 + 12))).overflow_y_scrollbar().p(6).border_b(1).border_color(t.border).children(files.map((f) => {
         const parts = f.path.split("/"), name = parts.pop();
+        const color = f.status === "A" ? t.ansi2 : f.status === "M" ? t.ansi3 : t.ansi1; // same as the Files tab
         return h_flex().id(`change-${f.path}`).h(28).flex_none().px(8).gap(8).items_center().rounded(7).cursor_pointer().when(this.open === f.path, (e) => e.bg(t.selected)).hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.pick(f.path, cx))
-          .child(div().w(14).text_size(11).text_color(f.status === "A" ? t.ansi2 : f.status === "D" ? t.ansi1 : f.status === "U" ? t.ansi1 : t.blocked).child(f.status))
-          .child(h_flex().flex_1().min_w(0).child(div().text_color(t.dim).truncate().child(parts.length ? parts.join("/") + "/" : "")).child(div().max_w(260).min_w(0).truncate().child(name)))
+          .child(div().w(14).text_size(11).text_color(color).child(f.status))
+          .child(h_flex().flex_1().min_w(0).child(div().text_color(t.dim).truncate().child(parts.length ? parts.join("/") + "/" : "")).child(div().max_w(260).min_w(0).truncate().text_color(color).child(name)))
           .when(f.add > 0, (e) => e.child(div().text_size(11).text_color(t.ansi2).child(`+${f.add}`))).when(f.del > 0, (e) => e.child(div().text_size(11).text_color(t.ansi1).child(`−${f.del}`)));
       })).when(!files.length, (e) => e.child(div().p(8).text_color(t.dim).child(this.error || (this.loading ? "Loading changes…" : this.root ? (this.files.length ? "No matching files" : "No uncommitted changes") : "No folder")))))
       .when(this.limited, el => el.child(div().px(12).py(4).text_size(11).text_color(t.dim).child("Showing the first 1,000 changed files")))
