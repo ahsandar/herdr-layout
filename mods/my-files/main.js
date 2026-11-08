@@ -107,7 +107,7 @@ export default class Files extends View {
           await this.loadFolder(path, context);
         }
         const top = await exec("git", ["rev-parse", "--show-toplevel"], { cwd, on }).catch(() => null);
-        const marks = {};
+        const marks = {}, counts = {};
         if (top?.code === 0) {
           // Writes nothing under .git (index lock, fsmonitor cookie): the folder watch would refresh again.
           const status = await exec("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"], { cwd, on }).catch(() => null);
@@ -115,11 +115,19 @@ export default class Files extends View {
             const xy = entry.slice(0, 2);
             marks[`${top.stdout.trim()}/${entry.slice(3)}`] = xy === "??" || xy.includes("A") ? "A" : xy.includes("U") ? "U" : xy.includes("D") ? "D" : "M";
           }
+          // shortcut: no counts before the first commit (no HEAD), when that matters diff --cached too.
+          const numstat = await exec("git", ["--no-optional-locks", "diff", "HEAD", "--numstat", "-z", "--no-renames"], { cwd, on }).catch(() => null);
+          if (numstat?.code === 0) for (const entry of numstat.stdout.split("\0")) {
+            const [a, d, ...rest] = entry.split("\t");
+            if (rest.length && a !== "-") counts[`${top.stdout.trim()}/${rest.join("\t")}`] = [Number(a) || 0, Number(d) || 0];
+          }
         }
         // A collapsed folder shows a dot when something under it changed.
         for (const p of Object.keys(marks)) for (let d = p.lastIndexOf("/"); d > cwd.length; d = p.lastIndexOf("/", d - 1)) marks[p.slice(0, d)] ??= "•";
+        // Folders add up the counts of what is under them.
+        for (const [p, [a, d]] of Object.entries({ ...counts })) for (let i = p.lastIndexOf("/"); i > cwd.length; i = p.lastIndexOf("/", i - 1)) { const k = p.slice(0, i), c = counts[k] ?? [0, 0]; counts[k] = [c[0] + a, c[1] + d]; }
         if (!this.current(context)) return;
-        this.marks = marks; this.error = null; this.watch(cwd, cx);
+        this.marks = marks; this.counts = counts; this.error = null; this.watch(cwd, cx);
       } catch (e) { if (this.current(context)) this.error = String(e); }
       finally { if (this.context === context) { this.loading = false; this.names = null; } if (this.view === "diff" && this.file && this.current(context)) this.showDiff(cx); else if (this.view === "file" && this.file && this.current(context)) this.reloadFile(cx); cx.notify(); }
     });
@@ -348,14 +356,16 @@ export default class Files extends View {
     if (out.length >= TOTAL || depth > 40) return out;
     for (const entry of this.entries.get(prefix) ?? []) {
       if (out.length >= TOTAL) break;
-      const path = prefix ? `${prefix}/${entry.name}` : entry.name, open = this.folders.has(path), mark = this.marks[`${this.root}/${path}`];
+      const path = prefix ? `${prefix}/${entry.name}` : entry.name, open = this.folders.has(path), mark = this.marks[`${this.root}/${path}`], count = this.counts?.[`${this.root}/${path}`];
       const color = mark === "A" ? t.ansi2 : mark === "D" || mark === "U" ? t.ansi1 : t.ansi3;
       out.push(h_flex().id(`file-${path}`).h(28).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer().hover(s => s.bg(t.hover))
         .on_click((_e, cx) => entry.dir ? this.toggle(path, cx) : this.show(path, cx))
         .child(entry.dir ? svg(`mods/my-files/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
         .child(svg(`mods/my-files/${entry.dir ? "folder" : "file"}.svg`).size(14).flex_none().text_color(t.muted))
         .child(div().flex_1().min_w(0).truncate().when(Boolean(mark), el => el.text_color(color)).child(entry.name))
-        .when(Boolean(mark), el => el.child(div().text_size(11).text_color(color).child(mark))));
+        .when(Boolean(count?.[0]), el => el.child(div().text_size(11).text_color(t.ansi2).child(`+${count[0]}`)))
+        .when(Boolean(count?.[1]), el => el.child(div().text_size(11).text_color(t.ansi1).child(`−${count[1]}`)))
+        .when(Boolean(mark), el => el.child(div().w(10).text_size(11).text_color(color).child(mark))));
       if (entry.dir && open) this.rows(path, depth + 1, out, t);
     }
     return out;
