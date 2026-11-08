@@ -22,6 +22,38 @@ This repo is also a backup: every mod is in `mods/`, so a fresh install needs no
 
 Activity and Context only fill in once the agent hooks are installed (see [Install](#install)).
 
+### Search
+
+Every tab can search what it shows. Click the 🔍 in a tab's header, or bind a key (a `global` entry in
+`~/.config/herdr-app/keys.json`; `ctrl-f` belongs to your shell and editors, so pick another):
+
+```json
+"ctrl-alt-f": "my-tabs.search"
+```
+
+The key opens the find bar of whichever tab is open. Enter or ▼ goes to the next match, ▲ to the previous,
+Esc closes. `Aa` forces case (the default is smart case: lowercase queries ignore case) and `.*` turns on
+regular expressions.
+
+| Tab | Searches |
+|---|---|
+| **Files** | The tree: **Name** (fuzzy file names, instantly) or **Content** (every file, grouped, click a hit to open it at that line). An open file: find in file with highlighted matches. |
+| **Changes** | **Files**: filter the changed files by path. **Diff**: find in the diff shown. |
+| **Graph** | The commit lines shown (hash, refs, subject), highlighted. |
+| **History** | The search box finds sessions by title and folder; the **Transcripts** chip searches inside every transcript instead. In an open transcript, find jumps message to message. |
+
+Content search uses [ripgrep](https://github.com/BurntSushi/ripgrep) when it is installed and plain `grep`
+otherwise; `.git` and ignored files are skipped (ripgrep) and binary files are never searched. It is local
+folders only, capped at 500 hits (5 per file, 1 MB per file, 10 seconds).
+
+It can also be driven from a script or a key binding, with a query or a JSON object:
+
+```sh
+herdr-app do 'my-tabs.search:todo'
+herdr-app do 'my-tabs.search:{"mode":"Content","query":"TODO","regex":false}'
+herdr-app do 'my-tabs.search:{"file":"README.md","query":"install"}'   # Files: open the file, then find
+```
+
 ### Syntax highlighting
 
 Diffs in Changes and non-native files in Files go through a small regex tokenizer
@@ -135,6 +167,7 @@ Plain Node, no dependencies. Each stubs Herdr's UI imports and exercises the pur
 node mods/my-changes/highlight.test.mjs   # tokenizer, diff rows, truncation, CRLF
 node mods/my-files/files.test.mjs         # Markdown link resolution
 node mods/my-graph/graph.test.mjs         # ANSI colours, branch parsing, git-graph arguments
+node mods/my-changes/search.test.mjs      # matching, fuzzy names, rg/grep scripts (run with and without ripgrep)
 ```
 
 Run `herdr-app check mods/<name>` after any change; `herdr-app status` should show no errors.
@@ -144,6 +177,11 @@ Run `herdr-app check mods/<name>` after any change; `herdr-app status` should sh
 - The Graph tab shows the latest 500 commits and polls every 3 seconds, only while the tab is open.
 - `git-graph` ignores branch names unless a model is set, so a filtered graph always uses its `simple`
   model; an unfiltered graph uses your repo's own model.
+- While a find query is set in the Files tab, the file is drawn as rows: no text selection or folding until
+  the bar closes. A Markdown file is searched as source. The editor widget has no search of its own.
+- History transcript find jumps to the message (the list restarts there) and marks it with a bar; it cannot
+  highlight words inside a message. Transcript content search matches raw JSONL, so a phrase that spans an
+  escaped quote or line break can be missed.
 - The Files tab does not reload an open file when it changes on disk (use **↗** for a live Markdown
   preview); the Diff view does refresh.
 - Activity, Context and History follow Claude Code, Codex and Pi transcripts and hooks, which are not

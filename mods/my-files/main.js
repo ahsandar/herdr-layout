@@ -1,8 +1,9 @@
 // A lazy file browser for the focused pane's folder, with bounded read-only previews.
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex, Editor, EditorState, TextView } from "gpui-base";
-import { READ, profileFor, editorLang, fileRows, diffRows, addedLines, codeView } from "./highlight.js";
-import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window, run } from "herdr";
+import { v_flex, h_flex, Editor, EditorState, TextView, VirtualListScrollHandle } from "gpui-base";
+import { READ, profileFor, editorLang, fileRows, diffRows, addedLines, codeView, rowTexts } from "./highlight.js";
+import { Finder, findInLines, splitSpans, fuzzyRank, contentArgs, parseHits, parseFileList, FILE_LIST_SCRIPT } from "./search.js";
+import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window, run, shared } from "herdr";
 
 function location() {
   const space = spaces().find(s => s.active), f = focused();
@@ -51,6 +52,11 @@ async function directory(path, on) {
 export default class Files extends View {
   init(_props, cx) {
     this.saved = new Map();
+    this.handle = cx.focus_handle(); this.scroll = VirtualListScrollHandle.new();
+    this.tree = new Finder("files-find", { placeholder: "Find files", modes: ["Name", "Content"], onChange: (cx) => this.treeSearch(cx) });
+    this.within = new Finder("files-in", { placeholder: "Find in file", onChange: (cx) => this.findInFile(cx), onJump: (m) => this.scroll.scroll_to_item(m.row, "center") });
+    this.names = null; this.matchNames = []; this.hits = []; this.searchSeq = 0; this.searchNote = null; this.jumpTo = null;
+    this.reqSeen = shared("search.open")?.n;
     this.entries = new Map(); this.folders = new Set(); this.pending = new Set(); this.marks = {};
     this.refresh(cx);
     cx.timer.every(10000, cx => this.refresh(cx));
@@ -85,7 +91,7 @@ export default class Files extends View {
       if (this.context) this.saved.set(this.context.key, { folders: this.folders, file: this.file });
       const saved = this.saved.get(next);
       this.context = { key: next, cwd, on }; this.root = cwd; this.on = on; this.entries = new Map(); this.folders = new Set(saved?.folders);
-      this.pending = new Set(); this.marks = {}; this.show(null); this.watched = null; this.error = null; this.limited = false;
+      this.pending = new Set(); this.marks = {}; this.show(null); this.watched = null; this.clearTree(); this.error = null; this.limited = false;
       this.loading = false;
       if (saved?.file) this.show(saved.file, cx);
     }
@@ -112,7 +118,7 @@ export default class Files extends View {
         if (!this.current(context)) return;
         this.marks = marks; this.error = null; this.watch(cwd, cx);
       } catch (e) { if (this.current(context)) this.error = String(e); }
-      finally { if (this.context === context) this.loading = false; if (this.view === "diff" && this.file && this.current(context)) this.showDiff(cx); cx.notify(); }
+      finally { if (this.context === context) { this.loading = false; this.names = null; } if (this.view === "diff" && this.file && this.current(context)) this.showDiff(cx); cx.notify(); }
     });
   }
 
@@ -138,7 +144,7 @@ export default class Files extends View {
   }
 
   show(path, cx) {
-    this.code?.release(); this.code = null; this.tokens = null; this.diff = null; this.view = "file"; this.markdown = null; this.mdSource = false; this.file = path; this.fileError = null;
+    this.code?.release(); this.code = null; this.tokens = null; this.diff = null; this.view = "file"; this.markdown = null; this.mdSource = false; this.file = path; this.fileError = null; this.text = null; this.resetFind();
     if (!path || !cx) return;
     const context = this.context, root = this.root, on = this.on;
     cx.spawn(async cx => {
@@ -147,14 +153,16 @@ export default class Files extends View {
         if (this.file !== path || !this.current(context)) return;
         if (text === null) { this.fileError = "This file is no longer available"; return; }
         if (text.includes("\0")) { this.fileError = "Binary file · no text preview"; return; }
+        this.text = text;
         if (isMarkdown(path)) { this.markdown = text.length > 300000 ? text.slice(0, 300000) + "\n\n… (file truncated)" : text; this.mdVersion = (this.mdVersion ?? 0) + 1; }
         const t = theme(), ext = path.includes(".") ? path.split(".").pop() : "txt", native = editorLang(path);
         // Native editor where it is known to highlight; the tokenizer view for the other TIOBE languages.
-        if (!native && profileFor(path)) { this.tokens = fileRows(text, path); return; }
+        if (!native && profileFor(path)) { this.tokens = fileRows(text, path); this.applyPending(cx, path); return; }
         this.code = EditorState.new({ language: native ?? ext, readonly: true,
           value: text.length > 400000 ? text.slice(0, 400000) + "\n… (file truncated)" : text,
           font_family: settings().font_family, font_size: 12,
           syntax: { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 } });
+        this.applyPending(cx, path);
       } catch { if (this.file === path && this.current(context)) this.fileError = "Cannot preview this file (binary, too large, or unreadable)"; }
       finally { cx.notify(); }
     });
@@ -179,6 +187,128 @@ export default class Files extends View {
     if (this.file) run("pane.split", { direction: "right", mod: "md-preview", props: { file: `${this.root}/${this.file}`, on: this.on ?? null } });
   }
 
+  // ---- search: file names and file contents (tree), text inside the open file (within)
+  clearTree() {
+    const f = this.tree;
+    f.open = false; f.query = ""; f.input.set_value("");
+    this.names = null; this.matchNames = []; this.hits = []; this.searchNote = null; this.searchSeq++;
+  }
+
+  resetFind() {
+    const f = this.within;
+    f.open = false; f.query = ""; f.input.set_value(""); f.setMatches([]); this.searching = false;
+  }
+
+  openFind(cx, opts = null) {
+    // { file, query }: open that file with the find bar already filled in
+    if (opts?.file) { this.jumpTo = { path: opts.file, line: null, query: opts.query ?? "", cs: Boolean(opts.cs), regex: Boolean(opts.regex) }; this.show(opts.file, cx); return; }
+    if (this.file && this.fileError) return;
+    const f = this.file ? this.within : this.tree;
+    f.show(cx);
+    if (!this.file) this.ensureNames(cx);
+    if (opts) f.apply(opts, cx);
+  }
+
+  ensureNames(cx) {
+    if (this.names || this.namesBusy || !this.root) return;
+    const context = this.context, { root, on } = this;
+    this.namesBusy = true;
+    cx.spawn(async cx => {
+      try { const r = await exec("sh", ["-c", FILE_LIST_SCRIPT], { cwd: root, on }); if (this.current(context)) this.names = parseFileList(r.stdout); }
+      catch { if (this.current(context)) this.names = []; }
+      finally { this.namesBusy = false; if (this.current(context) && this.tree.mode === "Name") this.treeSearch(cx); }
+    });
+  }
+
+  treeSearch(cx) {
+    const f = this.tree, q = f.query.trim(), seq = ++this.searchSeq;
+    this.hits = []; this.matchNames = []; this.searchNote = null; f.error = null;
+    if (!q) { cx.notify(); return; }
+    if (f.mode === "Name") { this.ensureNames(cx); this.matchNames = fuzzyRank(q, this.names ?? []); cx.notify(); return; }
+    f.error = findInLines([""], q, f).error;
+    if (f.error) { cx.notify(); return; }
+    this.searchNote = "Searching…";
+    cx.timer.after(250, cx => { if (seq === this.searchSeq) this.runContent(q, seq, cx); });
+    cx.notify();
+  }
+
+  runContent(q, seq, cx) {
+    const context = this.context, { root, on } = this, f = this.tree;
+    cx.spawn(async cx => {
+      try {
+        const r = await exec("sh", contentArgs(q, f), { cwd: root, on });
+        if (seq !== this.searchSeq || !this.current(context)) return;
+        this.hits = parseHits(r.stdout).map(h => {
+          const text = h.text.trimStart().slice(0, 300), found = findInLines([text], q, f).matches;
+          return { ...h, spans: splitSpans([["", text]], found.map(m => ({ start: m.start, end: m.end, cur: false }))) };
+        });
+        this.searchNote = this.hits.length ? null : "No results";
+      } catch { if (seq !== this.searchSeq) return; this.hits = []; this.searchNote = "Search failed or timed out"; }
+      cx.notify();
+    });
+  }
+
+  // A search result opens its file; a content hit also opens the find bar there, at that line.
+  openHit(path, hit, cx) {
+    const f = this.tree;
+    this.jumpTo = hit && f.mode === "Content" ? { path, line: hit.line, query: f.query, cs: f.cs, regex: f.regex } : null;
+    this.show(path, cx);
+  }
+
+  applyPending(cx, path) {
+    const p = this.jumpTo;
+    if (!p || p.path !== path) return;
+    this.jumpTo = null;
+    const f = this.within;
+    f.cs = p.cs; f.regex = p.regex; f.open = true; f.query = p.query; f.input.set_value(p.query);
+    this.findInFile(cx, p.line === null ? null : p.line - 1); // rows start at line 1
+  }
+
+  // Finds in the rows being shown. The native editor can't search or scroll, so while a query is set the
+  // file is drawn as rows instead (no selection or folding until the bar closes). line: jump to a row.
+  // quiet: a refresh, so keep the current match and the scroll position.
+  findInFile(cx, line = null, quiet = false) {
+    const f = this.within;
+    if (!f.open || !f.query) {
+      f.setMatches([]); this.searching = false;
+      if (this.code || this.markdown !== null) this.tokens = null;
+      cx.notify(); return;
+    }
+    if (this.view !== "diff" && !this.tokens) { if (this.text === null) return; this.tokens = fileRows(this.text, this.file); }
+    const rows = this.view === "diff" ? this.diff?.rows : this.tokens.rows;
+    if (!rows) { f.setMatches([]); cx.notify(); return; }
+    const r = findInLines(rowTexts(rows), f.query, f);
+    f.setMatches(r.matches, r.error, quiet);
+    this.searching = true;
+    if (!quiet && r.matches.length) {
+      f.cur = line === null ? 0 : Math.max(0, r.matches.findIndex(m => m.row === line));
+      f.remark(); this.scroll.scroll_to_item(r.matches[f.cur].row, "center");
+    }
+    cx.notify();
+  }
+
+  resultsView(t) {
+    const f = this.tree, rows = [];
+    if (f.mode === "Name") for (const p of this.matchNames) {
+      const i = p.lastIndexOf("/");
+      rows.push(h_flex().id(`found-${p}`).h(26).flex_none().px(8).gap(7).items_center().rounded(6).cursor_pointer().hover(s => s.bg(t.hover)).on_click((_e, cx) => this.openHit(p, null, cx))
+        .child(svg("mods/my-files/file.svg").size(13).flex_none().text_color(t.muted))
+        .child(div().flex_1().min_w(0).truncate().child(p.slice(i + 1)))
+        .child(div().max_w(180).min_w(0).truncate().text_size(11).text_color(t.dim).child(i > 0 ? p.slice(0, i) : "")));
+    } else {
+      let last = null;
+      for (const h of this.hits) {
+        if (h.path !== last) { last = h.path; rows.push(div().id(`hit-file-${h.path}`).flex_none().px(8).pt(8).pb(2).text_size(11).font_semibold().text_color(t.muted).truncate().child(h.path)); }
+        rows.push(h_flex().id(`hit-${h.path}:${h.line}`).h(22).flex_none().pl(14).pr(8).gap(8).items_center().rounded(5).cursor_pointer().hover(s => s.bg(t.hover)).on_click((_e, cx) => this.openHit(h.path, h, cx))
+          .child(div().w(34).flex_none().text_right().text_size(11).text_color(t.dim).child(String(h.line)))
+          .child(h_flex().flex_1().min_w(0).overflow_hidden().text_size(12).children(h.spans.map(([, s, found]) => { const el = div().flex_none().whitespace_nowrap().child(s); return found ? el.bg(t.ansi3 + "55") : el; }))));
+      }
+    }
+    return v_flex().id("files-results").flex_1().min_h(0).overflow_y_scrollbar().p(6)
+      .children(rows)
+      .when(!rows.length, el => el.child(div().p(8).text_size(12).text_color(f.error ? t.ansi1 : t.dim).child(f.error ?? this.searchNote ?? (f.mode === "Name" && !this.names ? "Listing files…" : "No results"))));
+  }
+
   showDiff(cx) {
     const path = this.file, context = this.context, root = this.root, on = this.on;
     if (this.view !== "diff") this.diff = null; // keep the old diff on screen while a refresh runs
@@ -194,7 +324,7 @@ export default class Files extends View {
           lines = text === null || text.includes("\0") ? ["No text diff available"] : addedLines(text);
         } else lines = ["No text diff available"];
       } catch { lines = ["Cannot preview this diff (too large or unreadable)"]; }
-      if (this.file === path && this.view === "diff" && this.current(context)) this.diff = diffRows(lines, path);
+      if (this.file === path && this.view === "diff" && this.current(context)) { this.diff = diffRows(lines, path); if (this.within.open) this.findInFile(cx, null, true); }
       cx.notify();
     });
     cx.notify();
@@ -218,17 +348,24 @@ export default class Files extends View {
 
   render(cx) {
     if (key() !== this.context?.key) this.refresh(cx);
-    const t = theme();
-    return v_flex().id("files").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
+    // The search key (my-tabs) names the open panel; only that panel opens its bar.
+    // Opening a bar notifies, which render may not do: so it runs from a timer.
+    const req = shared("search.open");
+    if (req && req.n !== this.reqSeen) { this.reqSeen = req.n; if (req.panel === "files") cx.timer.after(0, cx => this.openFind(cx, req.opts)); }
+    const t = theme(), find = { handle: this.scroll, marks: this.within.open && this.within.query ? this.within.marks() : null };
+    return v_flex().id("files").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13).track_focus(this.handle)
+      .on_key_down((e, cx) => { if ((this.file ? this.within : this.tree).keyDown(e, cx)) cx.stop_propagation(); })
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
         .when(Boolean(this.file), el => el.child(div().id("files-back").w(20).cursor_pointer().text_color(t.muted).on_click((_e, cx) => { this.show(null); cx.notify(); }).child("←")))
         .child(div().font_semibold().child("Files"))
         .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.file ?? this.root?.split(/[\\/]/).pop() ?? ""))
+        .child(div().id("files-find-button").size(24).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer().text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
+          .on_click((_e, cx) => this.openFind(cx)).child(svg("mods/my-tabs/search.svg").size(14)))
         .when(Boolean(this.file), el => {
           const md = isMarkdown(this.file), changed = Boolean(this.marks[`${this.root}/${this.file}`]), inFile = this.view === "file";
           const chip = (id, label, on, action) => div().id(id).px(7).py(2).rounded(5).text_size(11).cursor_pointer().when(on, e => e.bg(t.selected)).hover(e => e.bg(t.hover))
             .text_color(on ? t.foreground : t.muted).on_click(action).child(label);
-          const file = source => (_e, cx) => { this.mdSource = source; this.view = "file"; cx.notify(); };
+          const file = source => (_e, cx) => { this.mdSource = source; this.view = "file"; if (this.within.open) this.findInFile(cx); cx.notify(); };
           return el.children([
             ...(md ? [chip("files-md-preview", "Preview", inFile && !this.mdSource, file(false)), chip("files-md-source", "Source", inFile && this.mdSource, file(true))]
               : changed ? [chip("files-view-file", "File", inFile, file(false))] : []),
@@ -236,14 +373,19 @@ export default class Files extends View {
             ...(md ? [chip("files-md-pane", "↗", false, () => this.openPane())] : []),
           ]);
         }))
-      .when(!this.file, el => el.child(v_flex().id("files-tree").flex_1().min_h(0).overflow_y_scrollbar().p(6).children(this.rows("", 0, [], t))
+      .when(!this.file && this.tree.open, el => el.child(this.tree.bar(t, { nav: false, options: this.tree.mode === "Content",
+        trailing: this.tree.query.trim() ? div().text_size(11).text_color(t.dim).child(this.tree.mode === "Name" ? `${this.matchNames.length} files` : this.hits.length ? `${this.hits.length}${this.hits.length >= 500 ? "+" : ""} results` : "") : null })))
+      .when(Boolean(this.file) && this.within.open, el => el.child(this.within.bar(t)))
+      .when(!this.file && this.tree.open && Boolean(this.tree.query.trim()), el => el.child(this.resultsView(t)))
+      .when(!this.file && !(this.tree.open && this.tree.query.trim()), el => el.child(v_flex().id("files-tree").flex_1().min_h(0).overflow_y_scrollbar().p(6).children(this.rows("", 0, [], t))
         .when(Boolean(this.error) || !this.entries.get("")?.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child(this.error || (this.loading ? "Loading files…" : this.root ? "No files" : "No folder"))))
         .when(this.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child("File list limited to 500 entries per folder and 5,000 total")))))
       .when(Boolean(this.file), el => el.child(
-        this.view === "diff" ? (this.diff ? codeView("files-diff", this.diff, t, settings().font_family, 12) : div().p(12).text_color(t.dim).child("Loading diff…"))
+        this.view === "diff" ? (this.diff ? codeView("files-diff", this.diff, t, settings().font_family, 12, find) : div().p(12).text_color(t.dim).child("Loading diff…"))
+        : this.searching && this.tokens ? codeView("files-code", this.tokens, t, settings().font_family, 12, find)
         : this.markdown !== null && !this.mdSource ? div().id("files-md-scroll").flex_1().min_h(0).overflow_y_scrollbar().px(16).py(12)
           .child(TextView.markdown(`files-md-${this.mdVersion}`, this.markdown).selectable().on_link_click((url, cx) => this.followLink(url, cx)))
-        : this.tokens ? codeView("files-code", this.tokens, t, settings().font_family, 12)
+        : this.tokens ? codeView("files-code", this.tokens, t, settings().font_family, 12, find)
         : this.code ? Editor.new(this.code).flex_1().min_h(0) : div().p(12).text_color(t.dim).child(this.fileError || "Loading file…")));
   }
 }

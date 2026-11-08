@@ -1,6 +1,6 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings } from "herdr";
+import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, nextCommand } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -12,9 +12,26 @@ function find(node, id) {
 }
 
 export default class Tabs extends View {
-  init() {
+  init(_props, cx) {
     this.pressed = null;
+    // keys.json: "ctrl-alt-f": "my-tabs.search" arrives here; this bar is always shown, so it can name the open panel.
+    // "search" opens the bar; "search:text" or "search:{json}" (query, mode, cs, regex) opens it filled in.
+    cx.spawn(async () => {
+      for (;;) {
+        const command = await nextCommand();
+        if (command === "search" || command.startsWith("search:")) this.search(command.slice(7));
+      }
+    });
     this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}");
+  }
+
+  // Tells the open panel (Files, Changes, Graph, History) to open its find bar; each one checks `panel` before acting.
+  search(arg = "") {
+    const root = layout(), panel = find(root, "panel"), body = find(root, "panel-body");
+    if (!panel || panel.hidden || !body?.active) return;
+    let opts = null;
+    if (arg) { try { opts = arg.startsWith("{") ? JSON.parse(arg) : { query: arg }; } catch { return; } }
+    setShared("search.open", { panel: body.active, n: (shared("search.open")?.n ?? 0) + 1, opts });
   }
 
   // The side panel is remembered per space: switching shows that space's choice

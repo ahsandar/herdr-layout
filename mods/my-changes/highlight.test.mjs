@@ -32,7 +32,8 @@ assert.equal(diffRows(["@@ -1 +1 @@", "+int x;\r"], "a.c").rows[1].spans.map(([,
 
 // long files say they were cut
 assert.equal(fileRows("x\n".repeat(7000), "a.py").rows.at(-1).spans[0][1], "… (file truncated)");
-assert.equal(fileRows("x\n".repeat(10), "a.py").rows.length, 11);
+assert.equal(fileRows("x\n".repeat(10), "a.py").rows.length, 10);
+assert.equal(fileRows("a\nb\n", "a.py").rows[1].number, 2); // no header row: row 1 is line 2
 assert.equal(fileRows("x".repeat(400001), "a.py").rows.at(-1).spans[0][1], "… (file truncated)");
 
 assert.equal(editorLang("a.py"), "py"); assert.equal(editorLang("a.cob"), null);

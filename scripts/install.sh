@@ -69,4 +69,6 @@ cat <<MSG
 Done. Switch to the layout:   herdr-app do layout.switch '{"name":"$LAYOUT"}'
 Switch back with ctrl-shift-l. The Graph tab needs git-graph:   cargo install git-graph
 Activity and Context stay empty until the hooks are installed:   scripts/install.sh --update --hooks
+Search: every tab has a search button; for a key, add to the "global" section of $home/keys.json:
+  "ctrl-alt-f": "my-tabs.search"
 MSG

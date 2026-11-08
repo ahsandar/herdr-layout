@@ -1,6 +1,7 @@
 import { View, div, svg, image, list } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextView, Scrollbar } from "gpui-base";
-import { spaces, panes, focused, exec, appHome, home, theme, settings, run, notify, layout } from "herdr";
+import { spaces, panes, focused, exec, appHome, home, theme, settings, run, notify, layout, shared } from "herdr";
+import { Finder, findInLines, transcriptArgs, parseTranscripts } from "./search.js";
 
 // True when `child` is the open panel: timers keep running while a panel is hidden, so they check this first.
 const find = (n, id) => (n?.id === id ? n : (n?.children ?? []).reduce((hit, c) => hit ?? find(c, id), null));
@@ -56,7 +57,11 @@ export default class History extends View {
     this.start = 0; this.top = 0; this.drawnTop = Infinity;
     this.handle = cx.focus_handle();
     this.input = InputState.new({ placeholder: "Search sessions" });
-    this.input.on("change", (_e, cx) => { this.query = this.input.value(); cx.notify(); });
+    this.input.on("change", (_e, cx) => { this.query = this.input.value(); if (this.content) this.transcriptSearch(cx); cx.notify(); });
+    // Transcripts mode: the sessions whose transcript file contains the query (ripgrep/grep over the agents' folders).
+    this.content = false; this.contentFiles = null; this.searchSeq = 0; this.reqSeen = shared("search.open")?.n;
+    // Find inside the open transcript: a match is a message, and a jump restarts the list there.
+    this.find = new Finder("history-find", { placeholder: "Find in transcript", onChange: (cx) => this.searchTranscript(cx), onJump: (m, cx) => this.jump(m.row, cx) });
     this.input.on("focus", (_e, cx) => { this.typing = true; cx.notify(); });
     this.input.on("blur", (_e, cx) => { this.typing = false; cx.notify(); });
     this.refresh(cx);
@@ -77,6 +82,46 @@ export default class History extends View {
     });
   }
 
+  transcriptSearch(cx) {
+    const q = this.query.trim(), seq = ++this.searchSeq;
+    this.contentFiles = null;
+    if (q.length < 2) { cx.notify(); return; }
+    cx.timer.after(300, (cx) => {
+      if (seq !== this.searchSeq) return;
+      cx.spawn(async (cx) => {
+        try {
+          const r = await exec("sh", transcriptArgs(q));
+          if (seq === this.searchSeq) this.contentFiles = parseTranscripts(r.stdout);
+        } catch { if (seq === this.searchSeq) this.contentFiles = new Set(); }
+        cx.notify();
+      });
+    });
+  }
+
+  searchTranscript(cx) {
+    const f = this.find, tr = this.transcript;
+    if (!f.open || !f.query || !tr) f.setMatches([]);
+    else { const r = findInLines(tr.messages.map((m) => m.text), f.query, f); f.setMatches(r.matches, r.error); if (r.matches.length) this.jump(r.matches[0].row, cx); }
+    cx.notify();
+  }
+
+  // The lazy list can't scroll from code, so a jump starts the list at that message (as the turn rail does).
+  jump(row, cx) { this.start = row; this.top = row; cx.notify(); }
+
+  // The search key (my-tabs): the transcript's bar when one is open, else the session search box.
+  openFind(cx, opts = null) {
+    if (this.open) {
+      if (!this.transcript) return;
+      this.find.show(cx);
+      if (opts) this.find.apply(opts, cx);
+      return;
+    }
+    this.input.focus();
+    if (opts?.mode === "Transcripts") this.content = true;
+    if (typeof opts?.query === "string") { this.input.set_value(opts.query); this.query = opts.query; if (this.content) this.transcriptSearch(cx); }
+    cx.notify();
+  }
+
   // "This folder" means the repo the focused folder belongs to, else the folder itself.
   syncRoot(cx) {
     const { cwd } = location();
@@ -91,6 +136,7 @@ export default class History extends View {
 
   show(session, cx) {
     this.open = session; this.transcript = null; this.loadError = null; this.start = 0; this.top = 0;
+    this.find.open = false; this.find.query = ""; this.find.input.set_value(""); this.find.setMatches([]);
     const ref = session.file;
     cx.spawn(async (cx) => {
       try {
@@ -126,7 +172,7 @@ export default class History extends View {
     return this.sessions.filter((s) =>
       (this.agent === "all" || s.agent === this.agent) &&
       (this.scope === "all" || inside(s.cwd, this.root)) &&
-      (!q || s.title.toLowerCase().includes(q) || (s.cwd ?? "").toLowerCase().includes(q)));
+      (!q || (this.content ? Boolean(this.contentFiles?.has(s.file)) : s.title.toLowerCase().includes(q) || (s.cwd ?? "").toLowerCase().includes(q))));
   }
 
   icon(agent, size, t) {
@@ -151,7 +197,7 @@ export default class History extends View {
     const here = this.scope === "here", counts = {};
     for (const s of this.sessions) if (this.scope === "all" || inside(s.cwd, this.root)) counts[s.agent] = (counts[s.agent] ?? 0) + 1;
     const present = Object.keys(AGENTS).filter((a) => counts[a]);
-    const empty = this.error || (this.loading && !this.sessions.length ? "Loading sessions…"
+    const empty = this.error || (this.content && this.query.trim() ? (this.contentFiles ? "No transcript contains that" : "Searching transcripts…") : this.loading && !this.sessions.length ? "Loading sessions…"
       : here && !this.root ? "No folder" : this.query ? "No matching sessions" : here ? "No sessions in this folder" : "No sessions");
     return v_flex().size_full().min_h(0)
       .child(this.header(t, [
@@ -160,6 +206,8 @@ export default class History extends View {
         div().flex_1(),
         this.chip("scope-here", "This folder", here, t, (_e, cx) => { this.scope = "here"; cx.notify(); }),
         this.chip("scope-all", "All", !here, t, (_e, cx) => { this.scope = "all"; cx.notify(); }),
+        div().id("history-find-button").size(24).flex().items_center().justify_center().rounded(6).cursor_pointer().text_color(t.dim)
+          .hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click(() => this.input.focus()).child(svg("mods/my-tabs/search.svg").size(14)),
         div().id("history-refresh").size(24).flex().items_center().justify_center().rounded(6).cursor_pointer().text_color(t.dim)
           .hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click((_e, cx) => this.refresh(cx))
           .child(svg("mods/history/history.svg").size(14).when(this.loading, (el) => el.spin(900))),
@@ -168,6 +216,7 @@ export default class History extends View {
         .child(div().id("history-search").h(30).px(10).flex().items_center().rounded(8).border_1().border_color(this.typing ? t.accent : t.border).cursor_text()
           .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).child(Input.new(this.input).h_full().text_size(12).text_color(t.foreground)))
         .child(h_flex().id("history-agents").gap(4).overflow_x_scrollbar()
+          .child(this.chip("content-search", "Transcripts", this.content, t, (_e, cx) => { this.content = !this.content; this.transcriptSearch(cx); cx.notify(); }))
           .child(this.chip("agent-all", "All", this.agent === "all", t, (_e, cx) => { this.agent = "all"; cx.notify(); }))
           .children(present.map((a) => this.chip(`agent-${a}`, `${AGENTS[a].name} ${counts[a]}`, this.agent === a, t,
             (_e, cx) => { this.agent = this.agent === a ? "all" : a; cx.notify(); }, this.icon(a, 13, t))))))
@@ -218,7 +267,10 @@ export default class History extends View {
           .hover((st) => st.bg(t.hover).text_color(t.foreground)).on_click((_e, cx) => { this.open = null; this.transcript = null; cx.notify(); }).child("‹"),
         this.icon(s.agent, 16, t),
         div().flex_1().min_w(0).font_semibold().truncate().child(s.title || "(untitled)"),
+        div().id("history-find-in").size(24).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer().text_color(t.dim)
+          .hover((st) => st.bg(t.hover).text_color(t.foreground)).on_click((_e, cx) => this.openFind(cx)).child(svg("mods/my-tabs/search.svg").size(14)),
       ]))
+      .when(this.find.open, (el) => el.child(this.find.bar(t, { options: true })))
       .child(h_flex().flex_none().px(14).py(8).gap(8).items_center().border_b(1).border_color(t.border).text_size(11).text_color(t.dim)
         .child(v_flex().flex_1().min_w(0).gap(2)
           .child(div().truncate().child(short(s.cwd, this.home) || "(unknown folder)"))
@@ -261,7 +313,11 @@ export default class History extends View {
           .child(list(id, shown, (i) => `m${start + i}`, (i) => {
             const at = start + i;
             if (at < this.drawnTop) this.drawnTop = at;
-            return div().w_full().pt(i === 0 ? 12 : 0).pb(i === shown - 1 ? 12 : 10).child(this.message(messages[at], at, t));
+            // A message that contains a match gets a bar on its left edge; the current match's is brighter.
+            const hit = this.find.open && this.find.query ? this.find.marks().get(at) : null;
+            return div().w_full().pt(i === 0 ? 12 : 0).pb(i === shown - 1 ? 12 : 10)
+              .when(Boolean(hit), (el) => el.border_l(3).border_color(hit.some((r) => r.cur) ? t.accent : t.ansi3))
+              .child(this.message(messages[at], at, t));
           }).size_full())
           .child(Scrollbar.vertical(id).absolute().inset_0())))
       .when(turns.length > 1, (el) => el.child(this.turnRail(turns, messages, current, t)));
@@ -284,10 +340,14 @@ export default class History extends View {
     if (shown && !this.wasShown) this.refresh(cx);
     this.wasShown = shown;
     this.syncRoot(cx);
+    // Opening a bar notifies, which render may not do: so it runs from a timer.
+    const req = shared("search.open");
+    if (req && req.n !== this.reqSeen) { this.reqSeen = req.n; if (req.panel === "history") cx.timer.after(0, (cx) => this.openFind(cx, req.opts)); }
     const t = theme();
     return v_flex().id("history").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border)
       .text_color(t.foreground).text_size(13).track_focus(this.handle)
       .on_key_down((e, cx) => {
+        if (this.open && this.find.keyDown(e, cx)) { cx.stop_propagation(); return; }
         if (e.key !== "escape") return;
         if (this.typing) { this.typing = false; this.handle.focus(); }
         else if (this.open) { this.open = null; this.transcript = null; }

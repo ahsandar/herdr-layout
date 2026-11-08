@@ -1,7 +1,8 @@
-import { View, div } from "gpui-kit";
-import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { READ, diffRows, codeView } from "./highlight.js";
-import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings } from "herdr";
+import { View, div, svg } from "gpui-kit";
+import { v_flex, h_flex, InputState, Input, VirtualListScrollHandle } from "gpui-base";
+import { READ, diffRows, codeView, rowTexts } from "./highlight.js";
+import { Finder, findInLines, fuzzyRank } from "./search.js";
+import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, shared } from "herdr";
 
 function location() {
   const space = spaces().find((s) => s.active), f = focused();
@@ -14,6 +15,9 @@ const countLines = (text) => text ? text.split("\n").length - Number(text.endsWi
 
 export default class Changes extends View {
   init(_props, cx) {
+    this.scroll = VirtualListScrollHandle.new(); this.reqSeen = shared("search.open")?.n;
+    // Files: filter the list by path. Diff: find text in the diff shown.
+    this.find = new Finder("changes-find", { placeholder: "Find", modes: ["Files", "Diff"], onChange: (cx) => this.search(cx), onJump: (m) => this.scroll.scroll_to_item(m.row, "center") });
     this.files = []; this.code = { rows: [], width: 300 }; this.message = ""; this.handle = cx.focus_handle();
     this.input = InputState.new({ placeholder: "Commit message" });
     this.input.on("change", (_e, cx) => {
@@ -115,7 +119,18 @@ export default class Changes extends View {
     if (key() === context && this.open === path) this.setLines(lines.slice(0, 1500).map(line => line.length > 4000 ? line.slice(0, 4000) + "… (line truncated)" : line), path);
   }
 
-  setLines(lines, path) { this.code = diffRows(lines, path); }
+  setLines(lines, path) { this.code = diffRows(lines, path); this.refind(true); }
+
+  // Matches of the find query in the diff shown. quiet: the diff was reloaded, so keep the current match.
+  refind(quiet = false) {
+    const f = this.find;
+    if (!f.open || f.mode !== "Diff" || !f.query) { f.setMatches([]); return; }
+    const r = findInLines(rowTexts(this.code.rows), f.query, f);
+    f.setMatches(r.matches, r.error, quiet);
+    if (!quiet && r.matches.length) { f.remark(); this.scroll.scroll_to_item(r.matches[0].row, "center"); }
+  }
+
+  search(cx) { this.refind(); cx.notify(); }
 
   pick(path, cx) {
     this.open = this.open === path ? null : path; this.setLines([]); this.note = null;
@@ -150,23 +165,36 @@ export default class Changes extends View {
     if (key() !== this.context) this.refresh(cx);
     const t = theme(), add = this.files.reduce((n, f) => n + f.add, 0), del = this.files.reduce((n, f) => n + f.del, 0);
     const enabled = Boolean(this.message.trim() && this.root && !this.busy && !this.loading);
+    // The search key (my-tabs) names the open panel; only that panel opens its bar.
+    // Opening a bar notifies, which render may not do: so it runs from a timer.
+    const req = shared("search.open");
+    if (req && req.n !== this.reqSeen) { this.reqSeen = req.n; if (req.panel === "changes") cx.timer.after(0, (cx) => { this.find.show(cx); if (req.opts) this.find.apply(req.opts, cx); }); }
+    const f = this.find, diffMode = f.mode === "Diff", q = f.query.trim();
+    const byPath = new Map(this.files.map((x) => [x.path, x]));
+    const files = f.open && !diffMode && q ? fuzzyRank(q, [...byPath.keys()]).map((p) => byPath.get(p)) : this.files;
+    const marks = f.open && diffMode && f.query ? f.marks() : null;
     return v_flex().id("changes").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13).track_focus(this.handle)
       .on_key_down((e, cx) => {
+        if (this.find.keyDown(e, cx)) { cx.stop_propagation(); return; }
         if (e.key === "escape" && this.typing) { this.typing = false; this.handle.focus(); cx.stop_propagation(); cx.notify(); }
       })
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
         .child(div().font_semibold().child("Changes"))
         .child(div().px(5).py(1).rounded(4).border_1().border_color(t.border).text_size(10).text_color(t.muted).child(`${this.files.length} files`))
-        .child(div().flex_1()).child(div().text_size(11).text_color(t.ansi2).child(`+${add}`)).child(div().text_size(11).text_color(t.ansi1).child(`−${del}`)))
-      .child(v_flex().id("changes-list").flex_none().h(Math.min(200, Math.max(44, this.files.length * 28 + 12))).overflow_y_scrollbar().p(6).border_b(1).border_color(t.border).children(this.files.map((f) => {
+        .child(div().flex_1())
+        .child(div().id("changes-find-button").size(24).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer().text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground))
+          .on_click((_e, cx) => this.find.show(cx)).child(svg("mods/my-tabs/search.svg").size(14)))
+        .child(div().text_size(11).text_color(t.ansi2).child(`+${add}`)).child(div().text_size(11).text_color(t.ansi1).child(`−${del}`)))
+      .when(f.open, (el) => el.child(f.bar(t, { nav: diffMode, options: diffMode, trailing: !diffMode && q ? div().text_size(11).text_color(t.dim).child(`${files.length}/${this.files.length} files`) : null })))
+      .child(v_flex().id("changes-list").flex_none().h(Math.min(200, Math.max(44, files.length * 28 + 12))).overflow_y_scrollbar().p(6).border_b(1).border_color(t.border).children(files.map((f) => {
         const parts = f.path.split("/"), name = parts.pop();
         return h_flex().id(`change-${f.path}`).h(28).flex_none().px(8).gap(8).items_center().rounded(7).cursor_pointer().when(this.open === f.path, (e) => e.bg(t.selected)).hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.pick(f.path, cx))
           .child(div().w(14).text_size(11).text_color(f.status === "A" ? t.ansi2 : f.status === "D" ? t.ansi1 : f.status === "U" ? t.ansi1 : t.blocked).child(f.status))
           .child(h_flex().flex_1().min_w(0).child(div().text_color(t.dim).truncate().child(parts.length ? parts.join("/") + "/" : "")).child(div().max_w(260).min_w(0).truncate().child(name)))
           .when(f.add > 0, (e) => e.child(div().text_size(11).text_color(t.ansi2).child(`+${f.add}`))).when(f.del > 0, (e) => e.child(div().text_size(11).text_color(t.ansi1).child(`−${f.del}`)));
-      })).when(!this.files.length, (e) => e.child(div().p(8).text_color(t.dim).child(this.error || (this.loading ? "Loading changes…" : this.root ? "No uncommitted changes" : "No folder")))))
+      })).when(!files.length, (e) => e.child(div().p(8).text_color(t.dim).child(this.error || (this.loading ? "Loading changes…" : this.root ? (this.files.length ? "No matching files" : "No uncommitted changes") : "No folder")))))
       .when(this.limited, el => el.child(div().px(12).py(4).text_size(11).text_color(t.dim).child("Showing the first 1,000 changed files")))
-      .child(codeView("changes-diff", this.code, t, settings().font_family)
+      .child(codeView("changes-diff", this.code, t, settings().font_family, 11, { handle: this.scroll, marks })
         .when(!this.open && this.files.length > 0, (e) => e.child(div().absolute().top(6).px(12).text_color(t.dim).child("Select a file to view its changes"))))
       .when(Boolean(this.note), (e) => e.child(div().px(10).pb(8).text_size(11).text_color(t.ansi1).child(this.note)))
       .child(h_flex().flex_none().p(10).gap(8).border_t(1).border_color(t.border)

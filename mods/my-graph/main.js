@@ -1,7 +1,8 @@
 // Git graph of the focused pane's repo, drawn from `git-graph` (https://github.com/mlange-42/git-graph).
-import { View, div } from "gpui-kit";
-import { v_flex, h_flex, Scrollbar, v_virtual_list, InputState, Input } from "gpui-base";
-import { spaces, panes, focused, exec, theme, settings, layout } from "herdr";
+import { View, div, svg } from "gpui-kit";
+import { v_flex, h_flex, Scrollbar, v_virtual_list, InputState, Input, VirtualListScrollHandle } from "gpui-base";
+import { Finder, findInLines, splitSpans } from "./search.js";
+import { spaces, panes, focused, exec, theme, settings, layout, shared } from "herdr";
 
 const MAX = 500;
 // Reads write nothing under .git, so polling can't feed itself.
@@ -84,6 +85,10 @@ function graphArgs(picked, local) {
 export default class Graph extends View {
   init(_props, cx) {
     this.rows = []; this.width = 300; this.sig = null; this.dirty = 0;
+    this.handle = cx.focus_handle(); this.scroll = VirtualListScrollHandle.new(); this.reqSeen = shared("search.open")?.n;
+    // Finds text in the commit lines shown (hash, refs, subject), highlights it and jumps to it.
+    this.find = new Finder("graph-find", { placeholder: "Find in graph", onChange: (cx) => this.search(cx), onJump: (m) => this.scroll.scroll_to_item(m.row, "center") });
+    this.texts = [];
     this.branches = []; this.current = null; this.sel = new Set(); this.local = false; this.open = false; this.filter = "";
     this.input = InputState.new({ placeholder: "Filter branches" });
     this.input.on("change", (_e, cx) => { this.filter = this.input.value().trim().toLowerCase(); cx.notify(); });
@@ -104,6 +109,17 @@ export default class Graph extends View {
     if (name === null) this.sel.clear(); else if (this.sel.has(name)) this.sel.delete(name); else this.sel.add(name);
     this.save(); this.sig = null; this.refresh(cx, true); cx.notify();
   }
+
+  // Matches of the find query in the lines shown. quiet: the graph was redrawn, so keep the current match.
+  refind(quiet = false) {
+    const f = this.find;
+    if (!f.open || !f.query) { f.setMatches([]); return; }
+    const r = findInLines(this.texts, f.query, f);
+    f.setMatches(r.matches, r.error, quiet);
+    if (!quiet && r.matches.length) { f.remark(); this.scroll.scroll_to_item(r.matches[0].row, "center"); }
+  }
+
+  search(cx) { this.refind(); cx.notify(); }
 
   // What the tab shows, as one string, to tell whether a poll changed anything.
   shown() { return [this.sig, this.error, this.dirty, this.current, this.rows.length, this.branches.map((b) => b.name).join(",")].join("|"); }
@@ -139,6 +155,8 @@ export default class Graph extends View {
         if (r.code !== 0) { this.error = (r.stderr || r.stdout).trim().split("\n")[0] || "git-graph failed"; return; }
         const lines = r.stdout.replace(/\n$/, "").split("\n");
         this.rows = lines.map(ansi);
+        this.texts = this.rows.map((spans) => spans.map((s) => s[1]).join(""));
+        this.refind(true);
         this.width = Math.max(300, ...lines.map((l) => l.replace(/\x1b\[[\d;]*m/g, "").length * 8 + 30));
         this.sig = sig; this.error = null;
       } catch (e) {
@@ -179,23 +197,32 @@ export default class Graph extends View {
     if (key() !== this.context) this.refresh(cx);
     const t = theme(), ff = settings().font_family ?? "JetBrains Mono";
     const label = this.sel.size === 1 ? [...this.sel][0] : this.sel.size ? `${this.sel.size} branches` : this.local ? "Local branches" : "All branches";
-    const row = (spans) => h_flex().w_full().h(20).flex_none().px(10).children(spans.map(([c, s]) => {
-      const el = div().flex_none().whitespace_nowrap().child(s), col = paint(c, t);
-      return col ? el.text_color(col) : el;
+    // Opening a bar notifies, which render may not do: so it runs from a timer.
+    const req = shared("search.open");
+    if (req && req.n !== this.reqSeen) { this.reqSeen = req.n; if (req.panel === "graph") cx.timer.after(0, (cx) => { this.find.show(cx); if (req.opts) this.find.apply(req.opts, cx); }); }
+    const marks = this.find.open && this.find.query ? this.find.marks() : null;
+    // found: 1 is a search match, 2 the current one (search.js splitSpans); split first, paint each piece after.
+    const row = (spans) => h_flex().w_full().h(20).flex_none().px(10).children(spans.map(([c, s, found]) => {
+      const el = div().flex_none().whitespace_nowrap().child(s), col = paint(c, t), coloured = col ? el.text_color(col) : el;
+      return found ? coloured.bg(found === 2 ? t.accent + "99" : t.ansi3 + "55") : coloured;
     }));
-    return v_flex().id("graph").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
+    return v_flex().id("graph").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13).track_focus(this.handle)
+      .on_key_down((e, cx) => { if (this.find.keyDown(e, cx)) cx.stop_propagation(); })
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
         .child(div().font_semibold().child("Graph"))
         .when(this.dirty > 0, (e) => e.child(div().px(5).py(1).rounded(4).border_1().border_color(t.border).text_size(10).text_color(t.blocked).child(`${this.dirty} uncommitted`)))
         .child(div().flex_1())
+        .child(div().id("graph-find-button").size(24).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer().text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground))
+          .on_click((_e, cx) => this.find.show(cx)).child(svg("mods/my-tabs/search.svg").size(14)))
         .child(div().id("graph-branch-button").max_w(190).h(24).px(8).flex().items_center().gap(4).rounded(6).border_1().border_color(this.open ? t.accent : t.border).cursor_pointer().text_size(11).text_color(this.sel.size || this.local ? t.foreground : t.muted)
           .hover((s) => s.bg(t.hover)).on_click((_e, cx) => { this.open = !this.open; cx.notify(); })
           .child(div().min_w(0).truncate().child(label)).child(div().text_color(t.dim).child(this.open ? "▴" : "▾"))))
+      .when(this.find.open, (el) => el.child(this.find.bar(t, { options: true })))
       .when(this.open, (el) => el.child(this.filterPanel(t)))
       .child(div().flex_1().min_h(0).relative().font_family(ff).text_size(12)
         .child(div().id("graph-x").size_full().overflow_x_scrollbar()
           .child(div().w_full().min_w(this.width).h_full().child(v_virtual_list("graph-list", this.rows.length, 20, (i) => String(i),
-            (range) => this.rows.slice(range.start, range.end).map(row)).size_full())))
+            (range) => this.rows.slice(range.start, range.end).map((spans, k) => row(marks?.has(range.start + k) ? splitSpans(spans, marks.get(range.start + k)) : spans))).size_full().track_scroll(this.scroll))))
         .child(Scrollbar.vertical("graph-list").viewport_from_layout().absolute().inset_0())
         .when(!this.rows.length, (e) => e.child(div().absolute().top(8).px(12).text_color(t.dim).child(this.error || (this.loading ? "Loading graph…" : "No commits")))));
   }

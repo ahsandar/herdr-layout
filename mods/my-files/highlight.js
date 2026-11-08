@@ -4,6 +4,7 @@
 // block-comment state. Upgrade to the native Editor (tree-sitter) if exact colouring matters.
 import { div } from "gpui-kit";
 import { h_flex, Scrollbar, v_virtual_list } from "gpui-base";
+import { splitSpans } from "./search.js";
 
 export const READ = ["--literal-pathspecs", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "diff.autoRefreshIndex=false"];
 
@@ -167,7 +168,9 @@ export function diffRows(lines, path) {
 export function fileRows(text, path) {
   const cut = text.length > 400000, lines = (cut ? text.slice(0, 400000) : text).split("\n");
   if (lines.at(-1) === "") lines.pop();
+  // The hunk header only sets the first line number; the view starts at line 1 (row i is line i + 1).
   const d = diffRows([`@@ -1 +1 @@`, ...lines.slice(0, 5000).map((l) => " " + l)], path);
+  d.rows.shift();
   if (cut || lines.length > 5000) d.rows.push({ kind: "", spans: [["", "… (file truncated)"]] });
   return d;
 }
@@ -184,18 +187,25 @@ export function row({ kind, number, text, spans }, t, colors = COLOR(t)) {
   if (kind === "@") return div().w_full().px(12).h(20).flex_none().truncate().bg(t.raised).text_color(t.dim).child(text);
   return h_flex().w_full().h(20).flex_none().gap(10).when(kind === "+", (e) => e.bg(t.ansi2 + "18")).when(kind === "-", (e) => e.bg(t.ansi1 + "18"))
     .child(div().w(30).flex_none().text_right().text_color(t.dim).child(number === undefined ? "" : String(number)))
-    .child(h_flex().flex_1().min_w(0).overflow_hidden().children(spans.map(([k, s]) => {
-      const el = div().flex_none().whitespace_nowrap().child(s);
-      return colors[k] ? el.text_color(colors[k]) : el;
+    .child(h_flex().flex_1().min_w(0).overflow_hidden().children(spans.map(([k, s, found]) => {
+      const el = div().flex_none().whitespace_nowrap().child(s), coloured = colors[k] ? el.text_color(colors[k]) : el;
+      // found: 1 is a search match, 2 the current one (see search.js splitSpans)
+      return found ? coloured.bg(found === 2 ? t.accent + "99" : t.ansi3 + "55") : coloured;
     })));
 }
 
+// The text of each row, for searching: no gutter, no +/- prefix. Hunk headers are not searched.
+export const rowTexts = (rows) => rows.map((r) => (r.spans ? r.spans.map((s) => s[1]).join("") : ""));
+
 // The scrolling code/diff surface: virtual vertical list inside a horizontal scroller.
-export function codeView(id, { rows, width }, t, fontFamily, size = 11) {
+// handle: a VirtualListScrollHandle, so the caller can scroll to a row. marks: row index -> ranges to highlight.
+export function codeView(id, { rows, width }, t, fontFamily, size = 11, { handle = null, marks = null } = {}) {
   const colors = COLOR(t);
+  let list = v_virtual_list(id, rows.length, 20, (i) => String(i),
+    (range) => rows.slice(range.start, range.end).map((r, k) => row(marks?.has(range.start + k) ? { ...r, spans: splitSpans(r.spans, marks.get(range.start + k)) } : r, t, colors))).size_full();
+  if (handle) list = list.track_scroll(handle);
   return div().flex_1().min_h(0).relative().font_family(fontFamily ?? "JetBrains Mono").text_size(size)
     .child(div().id(`${id}-x`).size_full().overflow_x_scrollbar()
-      .child(div().w_full().min_w(width).h_full().child(v_virtual_list(id, rows.length, 20, (i) => String(i),
-        (range) => rows.slice(range.start, range.end).map((r) => row(r, t, colors))).size_full())))
+      .child(div().w_full().min_w(width).h_full().child(list)))
     .child(Scrollbar.vertical(id).viewport_from_layout().absolute().inset_0());
 }
