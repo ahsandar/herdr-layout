@@ -14,7 +14,7 @@ This repo is also a backup: every mod is in `mods/`, so a fresh install needs no
 | Tab | What it does | Comes from |
 |---|---|---|
 | **Files** | File tree with git status marks. Opening a file shows it with syntax highlighting for the TIOBE top 50 languages (see below). Changed files get a **File / Diff** toggle. Markdown files are rendered, with **Preview / Source** chips and **↗** to open a live preview pane beside the terminal. | `my-files` + `md-preview` |
-| **Changes** | Uncommitted files with +/- counts, a syntax-highlighted diff for the selected file, and a commit box. | `my-changes` |
+| **Changes** | Every file that is not on a remote yet: edited, untracked, or committed but not pushed, with +/- counts. Filter chips (all, uncommitted, untracked, unpushed, recommit) show how many of each; `recommit` marks a file edited again after it was committed. A syntax-highlighted diff for the selected file, and a commit box. | `my-changes` |
 | **Graph** | The repo's commit graph from [`git-graph`](https://github.com/mlange-42/git-graph), updated as commits and branches change. A **branch filter** picks one or more branches, with a **Local only** switch; the choice is remembered per folder. An `N uncommitted` badge shows working-tree changes. | `my-graph` |
 | **Activity** | What the focused agent has done: prompts, steps, replies and running sub-agents. | `bettr-activity` (from [bettr](https://github.com/dissimulate/bettr), see [THIRD_PARTY.md](THIRD_PARTY.md)) |
 | **Context** | How full the focused agent's context window is, split by kind, plus a prompt-cache overview. | `bettr-context` (from bettr) |
@@ -166,6 +166,7 @@ Plain Node, no dependencies. Each stubs Herdr's UI imports and exercises the pur
 ```sh
 node mods/my-changes/highlight.test.mjs   # tokenizer, diff rows, truncation, CRLF
 node mods/my-files/files.test.mjs         # Markdown link resolution
+node mods/my-changes/groups.test.mjs       # change tags, numstat merge, unpushed files
 node mods/my-files/rollup.test.mjs        # folder marks and +/- totals
 node mods/my-graph/graph.test.mjs         # ANSI colours, branch parsing, git-graph arguments
 node mods/my-changes/search.test.mjs      # matching, fuzzy names, rg/grep scripts (run with and without ripgrep)
