@@ -3,14 +3,17 @@
 export const FILTERS = ["all", "uncommitted", "untracked", "unpushed", "recommit"];
 export const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"; // diff base when the oldest unpushed commit is the root
 
-export function tagsOf(f) {
-  const tags = [];
-  if (f.fresh) tags.push("untracked"); else if (f.dirty) tags.push("uncommitted");
-  if (f.unpushed) tags.push("unpushed");
-  if (f.unpushed && f.dirty && !f.fresh) tags.push("recommit");
-  return tags;
+export function inFilter(f, name) {
+  switch (name) {
+    case "all": return true;
+    case "untracked": return Boolean(f.fresh);
+    case "uncommitted": return Boolean(f.dirty && !f.fresh);
+    case "unpushed": return Boolean(f.unpushed);
+    case "recommit": return Boolean(f.unpushed && f.dirty && !f.fresh);
+  }
+  return false;
 }
-export const inFilter = (f, name) => name === "all" || tagsOf(f).includes(name);
+export const tagsOf = (f) => FILTERS.filter((name) => name !== "all" && inFilter(f, name));
 
 // git diff --numstat -z outputs ("<add>\t<del>\t<path>" split by NUL) -> { path: { add, del, binary } }. Outputs add up.
 export function numstatMap(outputs) {
@@ -32,12 +35,29 @@ export function parseNameStatus(out) {
 }
 
 // Flags files already listed and appends the ones that only exist in unpushed commits (stopping at `limit` files).
+// Returns how many it had to leave out.
 export function mergeUnpushed(files, letters, stats, limit) {
   const byPath = new Map(files.map((f) => [f.path, f]));
+  let dropped = 0;
   for (const [path, letter] of letters) {
     const known = byPath.get(path);
     if (known) known.unpushed = true;
     else if (files.length < limit) files.push({ path, status: letter, fresh: false, dirty: false, unpushed: true, add: 0, del: 0, ...stats[path] });
+    else dropped++;
   }
-  return files;
+  return dropped;
+}
+
+// What counts as unpushed: commits no remote-tracking branch has. Returns { base, note }: `base` is the commit
+// before the oldest of them (diff base .. HEAD is everything unpushed), or null with a note saying why not.
+// `git` is async (args) => { code, stdout } run in the repo.
+export async function unpushedBase(git, hasHead) {
+  if (!hasHead) return { base: null, note: "No commits yet" };
+  const remotes = await git(["remote"]);
+  if (remotes.code !== 0 || !remotes.stdout.trim()) return { base: null, note: "No remote, so nothing counts as unpushed" };
+  const revs = await git(["rev-list", "--topo-order", "HEAD", "--not", "--remotes"]);
+  const oldest = revs.code === 0 ? revs.stdout.trim().split("\n").pop() : "";
+  if (!oldest) return { base: null, note: null };
+  const parent = await git(["rev-parse", "--verify", "-q", `${oldest}^`]);
+  return { base: parent.code === 0 ? parent.stdout.trim() : EMPTY_TREE, note: null };
 }

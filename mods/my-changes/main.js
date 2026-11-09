@@ -2,7 +2,7 @@ import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, VirtualListScrollHandle } from "gpui-base";
 import { READ, diffRows, codeView, rowTexts, statusColor, visible } from "./highlight.js";
 import { Finder, findInLines, fuzzyRank } from "./search.js";
-import { FILTERS, EMPTY_TREE, tagsOf, inFilter, numstatMap, parseNameStatus, mergeUnpushed } from "./groups.js";
+import { FILTERS, tagsOf, inFilter, numstatMap, parseNameStatus, mergeUnpushed, unpushedBase } from "./groups.js";
 import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, shared } from "herdr";
 
 function location() {
@@ -78,25 +78,18 @@ export default class Changes extends View {
         }
         // Committed but not pushed: commits no remote has, as one diff from before the oldest of them.
         // shortcut: with merges in the unpushed commits the diff base is the oldest commit's first parent; fine for linear work.
-        let base = null, unpushedNote = null;
-        const remotes = await git(["remote"]);
-        if (head.code !== 0) unpushedNote = "No commits yet";
-        else if (remotes.code !== 0 || !remotes.stdout.trim()) unpushedNote = "No remote, so nothing counts as unpushed";
-        else {
-          const revs = await git(["rev-list", "--topo-order", "HEAD", "--not", "--remotes"]);
-          const oldest = revs.code === 0 ? revs.stdout.trim().split("\n").pop() : "";
-          if (oldest) { const parent = await git(["rev-parse", "--verify", "-q", `${oldest}^`]); base = parent.code === 0 ? parent.stdout.trim() : EMPTY_TREE; }
-        }
+        const { base, note: unpushedNote } = await unpushedBase(git, head.code === 0);
+        let dropped = 0;
         if (base) {
           const [names, counts] = [await git(["diff", "--name-status", "-z", "--no-renames", base, "HEAD"]), await git(["diff", "--numstat", "-z", "--no-renames", base, "HEAD"])];
-          if (names.code === 0 && counts.code === 0) mergeUnpushed(files, parseNameStatus(names.stdout), numstatMap([counts.stdout]), 1000);
+          if (names.code === 0 && counts.code === 0) dropped = mergeUnpushed(files, parseNameStatus(names.stdout), numstatMap([counts.stdout]), 1000);
         }
         if (key() !== context) return;
-        this.root = root; this.on = on; this.hasHead = head.code === 0; this.base = base; this.unpushedNote = unpushedNote; this.files = files; this.limited = entries.length > 1000; this.error = null;
+        this.root = root; this.on = on; this.hasHead = head.code === 0; this.base = base; this.unpushedNote = unpushedNote; this.files = files; this.tally = Object.fromEntries(FILTERS.map((name) => [name, files.filter((f) => inFilter(f, name)).length])); this.limited = entries.length > 1000 || dropped > 0; this.error = null;
         this.watch(root, cx);
         if (this.open && !files.some((f) => f.path === this.open)) { this.open = null; this.setLines([]); }
         // The first file's diff shows until you pick another.
-        if (!this.open && !this.closed && files.length) this.open = files[0].path;
+        if (!this.open && !this.closed) this.open = files.find((f) => inFilter(f, this.filter))?.path ?? null;
         if (this.open) {
           try { await this.load(this.open, context); }
           catch { if (key() === context) this.setLines(["Cannot preview this diff (too large or unreadable)"]); }
@@ -154,11 +147,12 @@ export default class Changes extends View {
 
   commit(cx) {
     if (!this.message.trim() || !this.root || this.busy || this.loading || this.context !== key()) return;
-    const root = this.root, on = this.on, context = this.context, message = this.message.trim();
+    const root = this.root, on = this.on, context = this.context, message = this.message.trim(), tracked = this.filter === "uncommitted";
     this.busy = true; this.note = null;
     cx.spawn(async (cx) => {
       try {
-        for (const args of [["add", "-A"], ["commit", "-m", message]]) {
+        // Only the "uncommitted" chip leaves untracked files out.
+        for (const args of [["add", tracked ? "-u" : "-A"], ["commit", "-m", message]]) {
           const r = await exec("git", args, { cwd: root, on });
           if (r.code !== 0) throw new Error((r.stderr || r.stdout).trim());
         }
@@ -176,7 +170,9 @@ export default class Changes extends View {
     this.wasShown = shown;
     const list = this.files.filter((x) => inFilter(x, this.filter));
     const t = theme(), add = list.reduce((n, f) => n + f.add, 0), del = list.reduce((n, f) => n + f.del, 0);
-    const enabled = Boolean(this.message.trim() && this.root && !this.busy && !this.loading);
+    // What Commit takes: tracked edits on the "uncommitted" chip, tracked edits and untracked files on any other.
+    const toCommit = this.filter === "uncommitted" ? this.tally?.uncommitted ?? 0 : (this.tally?.uncommitted ?? 0) + (this.tally?.untracked ?? 0);
+    const enabled = Boolean(this.message.trim() && toCommit && this.root && !this.busy && !this.loading);
     // The search key (my-tabs) names the open panel; only that panel opens its bar.
     // Opening a bar notifies, which render may not do: so it runs from a timer.
     const req = shared("search.open");
@@ -184,8 +180,7 @@ export default class Changes extends View {
     const f = this.find, diffMode = f.mode === "Diff", q = f.query.trim();
     const byPath = new Map(list.map((x) => [x.path, x]));
     const files = f.open && !diffMode && q ? fuzzyRank(q, [...byPath.keys()]).map((p) => byPath.get(p)) : list;
-    const tally = (name) => this.files.filter((x) => inFilter(x, name)).length;
-    const marks = f.open && diffMode && f.query ? f.marks() : null;
+        const marks = f.open && diffMode && f.query ? f.marks() : null;
     return v_flex().id("changes").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13).track_focus(this.handle)
       .on_key_down((e, cx) => {
         if (this.find.keyDown(e, cx)) { cx.stop_propagation(); return; }
@@ -199,11 +194,11 @@ export default class Changes extends View {
           .on_click((_e, cx) => this.find.show(cx)).child(svg("mods/my-tabs/search.svg").size(14)))
         .child(div().text_size(11).text_color(t.ansi2).child(`+${add}`)).child(div().text_size(11).text_color(t.ansi1).child(`−${del}`)))
       .child(h_flex().flex_none().px(10).py(5).gap(6).items_center().border_b(1).border_color(t.border).children(FILTERS.map((name) => {
-        const on = this.filter === name, n = tally(name);
+        const on = this.filter === name, n = this.tally?.[name] ?? 0;
         return div().id(`filter-${name}`).px(7).py(2).rounded(10).text_size(11).cursor_pointer().border_1().border_color(on ? t.accent : t.border).text_color(on ? t.foreground : n || name === "all" ? t.muted : t.dim).hover((s) => s.bg(t.hover))
           .on_click((_e, cx) => { this.filter = name; cx.notify(); }).child(`${name} ${n}`);
       })))
-      .when(f.open, (el) => el.child(f.bar(t, { nav: diffMode, options: diffMode, trailing: !diffMode && q ? div().text_size(11).text_color(t.dim).child(`${files.length}/${this.files.length} files`) : null })))
+      .when(f.open, (el) => el.child(f.bar(t, { nav: diffMode, options: diffMode, trailing: !diffMode && q ? div().text_size(11).text_color(t.dim).child(`${files.length}/${list.length} files`) : null })))
       .child(v_flex().id("changes-list").flex_none().h(Math.min(200, Math.max(44, files.length * 28 + 12))).overflow_y_scrollbar().p(6).border_b(1).border_color(t.border).children(files.map((f) => {
         const parts = f.path.split("/"), name = parts.pop();
         const color = statusColor(f.status, t);
@@ -219,6 +214,6 @@ export default class Changes extends View {
       .when(Boolean(this.note), (e) => e.child(div().px(10).pb(8).text_size(11).text_color(t.ansi1).child(this.note)))
       .child(h_flex().flex_none().p(10).gap(8).border_t(1).border_color(t.border)
         .child(div().id("commit-message").flex_1().min_w(0).h(32).px(10).flex().items_center().rounded(8).border_1().border_color(this.typing ? t.accent : t.border).cursor_text().on_mouse_down("left", (_e, cx) => cx.stop_propagation()).child(Input.new(this.input).h_full().text_size(12).text_color(t.foreground)))
-        .child(div().id("commit").h(32).px(14).flex().items_center().rounded(8).bg(enabled ? t.solid : t.raised).text_color(enabled ? t.solid_foreground : t.dim).text_size(12).when(enabled, (e) => e.cursor_pointer()).on_click((_e, cx) => this.commit(cx)).child(this.busy ? "Committing…" : "Commit")));
+        .child(div().id("commit").h(32).px(14).flex().items_center().rounded(8).bg(enabled ? t.solid : t.raised).text_color(enabled ? t.solid_foreground : t.dim).text_size(12).when(enabled, (e) => e.cursor_pointer()).on_click((_e, cx) => this.commit(cx)).child(this.busy ? "Committing…" : toCommit ? `Commit ${toCommit} file${toCommit > 1 ? "s" : ""}` : "Commit")));
   }
 }
