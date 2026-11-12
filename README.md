@@ -17,10 +17,15 @@ This repo is also a backup: every mod is in `mods/`, so a fresh install needs no
 | **Changes** | Every file that is not on a remote yet: edited, untracked, or committed but not pushed, with +/- counts. Filter chips (all, uncommitted, untracked, unpushed, recommit) show how many of each; `recommit` marks a file edited again after it was committed. A syntax-highlighted diff for the selected file, and a commit box. | `my-changes` |
 | **Graph** | The repo's commit graph from [`git-graph`](https://github.com/mlange-42/git-graph), updated as commits and branches change. A **branch filter** picks one or more branches, with a **Local only** switch; the choice is remembered per folder. An `N uncommitted` badge shows working-tree changes. | `my-graph` |
 | **Activity** | What the focused agent has done: prompts, steps, replies and running sub-agents. | `bettr-activity` (from [bettr](https://github.com/dissimulate/bettr), see [THIRD_PARTY.md](THIRD_PARTY.md)) |
-| **Context** | How full the focused agent's context window is, split by kind, plus a prompt-cache overview. | `bettr-context` (from bettr) |
+| **Context** | How full the focused agent's context window is, split by kind, plus a prompt-cache overview. Works for Claude Code and Codex (through hooks), and for **Pi** and **opencode** with nothing installed in them (see below). | `bettr-context` (from bettr, patched) |
 | **History** | Past Claude Code, Codex and Pi sessions with search, transcripts and a **Resume** button that reopens a session in a new tab. | `history` (from [herdr-main-usage](https://github.com/plutotw/herdr-main-usage), patched) |
 
-Activity and Context only fill in once the agent hooks are installed (see [Install](#install)).
+Activity and Context only fill in once the agent hooks are installed (see [Install](#install)), except Context for
+**Pi** and **opencode**: they have no hook file, so while one is focused the Context tab runs `bettr-reporter/pull.py`
+every 5 seconds and reads what the agent already wrote. Pi: its newest session file for that folder
+(`~/.pi/agent/sessions`), with window sizes from Pi's own model lists. opencode: its SQLite database
+(`~/.local/share/opencode/opencode.db`, opened read-only) and its `~/.cache/opencode/models.json`. Nothing is added to either
+agent and no package is needed beyond Python 3. Activity for Pi and opencode is not covered.
 
 ### Search
 
@@ -120,7 +125,7 @@ All of it is in this repo, under `mods/`. Nothing is downloaded.
 | `my-changes` | clone of Herdr's `changes` 0.1.13, plus highlighting (mine) |
 | `my-graph` | new (mine) |
 | `my-tabs` | clone of Herdr's `tabs` 0.1.13, plus the Graph, Activity, Context and History buttons (mine) |
-| `bettr-activity`, `bettr-context`, `bettr-reporter` | [dissimulate/bettr](https://github.com/dissimulate/bettr), unchanged |
+| `bettr-activity`, `bettr-context`, `bettr-reporter` | [dissimulate/bettr](https://github.com/dissimulate/bettr); `bettr-context` and `bettr-reporter` have local additions for Pi and opencode, see [THIRD_PARTY.md](THIRD_PARTY.md) |
 | `history`, `md-preview` | [plutotw/herdr-main-usage](https://github.com/plutotw/herdr-main-usage); `history` has a small patch |
 
 Folder names must stay `bettr-*`: the hooks call the reporter by folder name. Sources, pinned commits,
@@ -138,6 +143,7 @@ open in your browser through `xdg-open` / `open`.
 | Files, Changes | `git`, `sh` | the focused pane's folder |
 | Graph | `git`, `git-graph`, `sh` | the focused pane's repo; remembers the branch choice in the mod's `localStorage` |
 | Activity, Context | nothing | terminal labels published by the reporter |
+| Context for Pi and opencode | `python3 pull.py` (every 5 s while that agent is focused and the tab is open) | Pi's session files and model lists in `~/.pi/agent`, opencode's database and model cache (read only); keeps Pi's read position and opencode's last result in `~/.cache/bettr/pull/` (opencode is rebuilt only when a message or part changed) |
 | reporter (only with `--hooks`) | `python3` and `hc label` from agent hooks | agent transcripts (read), `~/.cache/bettr/` (state). It stores the first line of prompts, file paths, commands and replies; credential-like values are masked. |
 | History | `python3 history.py` | agent transcripts in `~/.claude`, `~/.codex`, `~/.pi` (read), `~/.cache/herdr-history/index.json` (cache). Resume runs `claude --resume`, `codex resume` or `pi --session`. |
 
@@ -170,6 +176,8 @@ node mods/my-changes/groups.test.mjs       # change tags, numstat merge, unpushe
 node mods/my-files/rollup.test.mjs        # folder marks and +/- totals
 node mods/my-graph/graph.test.mjs         # ANSI colours, branch parsing, git-graph arguments
 node mods/my-changes/search.test.mjs      # matching, fuzzy names, rg/grep scripts (run with and without ripgrep)
+(cd mods/bettr-reporter && python3 -m unittest test_pull test_redaction_patch)   # Pi and opencode context, redaction
+node mods/bettr-context/model.test.mjs   # hook-less agents, stale labels
 ```
 
 Run `herdr-app check mods/<name>` after any change; `herdr-app status` should show no errors.
@@ -188,6 +196,12 @@ Run `herdr-app check mods/<name>` after any change; `herdr-app status` should sh
   preview); the Diff view does refresh.
 - Activity, Context and History follow Claude Code, Codex and Pi transcripts and hooks, which are not
   stable APIs and may change.
+- Context for Pi and opencode picks the newest session of the focused terminal's folder, so two sessions in one
+  folder show the later one, and a new session shows the previous one until it writes its first message. It lags by up to
+  5 seconds. Pi sessions are trees: the total is exact, but the rows also count branches you left. opencode's database has no
+  system prompt or tool list, so that text is in Messages' `Other`; its compaction marker (an assistant message with
+  `summary`) is taken from its message format and has not been seen in a real session here. Needs SQLite 3.38+ (Python 3.12 ships it).
+  Pi's window size is found only for a managed Pi install and models it lists; otherwise tokens show without a percentage.
 
 ## Licence
 

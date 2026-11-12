@@ -32,6 +32,11 @@ def obj(value):
     return value if isinstance(value, dict) else {}
 
 
+def number(value):
+    """`value` when it is a real number (not a bool), else 0."""
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else 0
+
+
 def parse(raw):
     """One JSON line (text or bytes) as a dict, or None."""
     try:

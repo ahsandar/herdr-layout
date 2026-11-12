@@ -2,6 +2,7 @@ import { View, div, svg } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { agents, focused, layout, props, run, settings, terminals, theme } from "herdr";
 import { cacheView, contextState, contextView, focusedAgent, logView, percent, tokens } from "./model.js";
+import { pull, pulledText, wants } from "./pull.js";
 
 // A soft rainbow, one colour per row in display order. The reserve and unknown rows are grey.
 const COLORS = {
@@ -34,10 +35,25 @@ function find(node, id) {
   return null;
 }
 
+// Whether the Context tab is the one shown: a hidden tab's timers keep running.
+function shown() {
+  const root = layout(), panel = find(root, "panel"), body = find(root, "panel-body");
+  return !(body && (panel?.hidden || body.active !== "context"));
+}
+
 export default class Context extends View {
-  init() {
+  init(initial, cx) {
     // Rows the user opened.
     this.open = new Set();
+    // Pi and opencode have no hooks, so their context is read from their own files. Only the
+    // main block does it; the Cache block shares the result (pull.js) and is redrawn with it.
+    if (!initial?.section) cx.timer.every(5000, cx => this.poll(cx));
+  }
+
+  poll(cx) {
+    const terminal = focusedAgent(focused(), terminals(), agents());
+    if (!shown() || !wants(terminal)) return;
+    pull(terminal, focused()?.cwd).then(changed => { if (changed) cx.notify(); });
   }
 
   toggle(key, cx) {
@@ -129,11 +145,14 @@ export default class Context extends View {
       .items_center().when(right, el => el.justify_end()).tooltip(item.tip).child(cell(item))));
   }
 
-  render() {
+  render(cx) {
     const t = theme();
     readFont();
     const terminal = focusedAgent(focused(), terminals(), agents());
-    const state = contextState(terminal);
+    const state = contextState(terminal, pulledText(terminal));
+    // A newly focused Pi or opencode agent is read at once, not at the next tick.
+    const key = `${terminal?.address}|${focused()?.cwd}`;
+    if (!props()?.section && wants(terminal) && key !== this.pulledFor) { this.pulledFor = key; this.poll(cx); }
     if (props()?.section === "cache") return this.cache(t, state);
     this.showCache(Boolean(terminal));
     const header = h_flex().h(HEADER).flex_none().px(14).items_center().border_b(1).border_color(t.border)
@@ -141,7 +160,8 @@ export default class Context extends View {
     const root = v_flex().id("context").size_full().min_h(0).rounded(10).overflow_hidden()
       .bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13).child(header);
     if (!state) {
-      return root.child(v_flex().p(14).text_size(12).text_color(t.dim).child("Focus an agent to see its context"));
+      return root.child(v_flex().p(14).text_size(12).text_color(t.dim)
+        .child(wants(terminal) ? "No session found in this folder yet" : "Focus an agent to see its context"));
     }
     const view = contextView(state, this.open), window = state.window;
     const body = v_flex().id("context-body").flex_1().min_h(0).overflow_y_scrollbar().px(14).py(12).gap(2);

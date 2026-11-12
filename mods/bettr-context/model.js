@@ -3,11 +3,16 @@
 
 // The focused agent's terminal, or null. The displayed terminal takes precedence over
 // the agent-block fallback. Same rule as the Activity panel.
+// Agents with no hooks, whose context pull.js reads from their own files. Herdr does not
+// call one an agent unless it reports a status, and opencode does not.
+export const HOOKLESS = new Set(["pi", "opencode"]);
+
 export function focusedAgent(focus, terminals, agents) {
   const address = focus?.shown ?? focus?.terminal ?? focus?.agent;
   const terminal = terminals.find(item => item.address === address && item.state === "live");
   if (!terminal) return null;
-  return terminal.program?.agent || terminal.status || agents.some(item => item.address === address) ? terminal : null;
+  return terminal.program?.agent || terminal.status || HOOKLESS.has(terminal.program?.key)
+    || agents.some(item => item.address === address) ? terminal : null;
 }
 
 const count = value => Number.isSafeInteger(value) && value > 0 ? value : 0;
@@ -66,8 +71,10 @@ function shape(state) {
 // in the same terminal is stale; checked on every read, as its text does not change
 // when another agent starts there.
 let last = { text: null, value: null };
-export function contextState(terminal) {
-  const value = terminal?.labels?.["bettr.context"];
+export function contextState(terminal, pulled = null) {
+  // `pulled`: text from pull.js for an agent with no hooks (Pi, opencode). It wins for those
+  // agents, as an old label from another agent in the same terminal is stale (checked below).
+  const value = (HOOKLESS.has(terminal?.program?.key) ? pulled : null) ?? terminal?.labels?.["bettr.context"];
   if (typeof value !== "string") return null;
   if (last.text !== value) {
     let state = null;
