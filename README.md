@@ -4,8 +4,8 @@ A [Herdr](https://herdr.dev) layout (`my-layout`) that turns the right-hand pane
 workbench: **Files**, **Changes**, **Graph**, **Activity**, **Context** and **History**. Each tab has its
 own button in the tab bar, and clicking the open one closes the panel again.
 
-It is Herdr's own `main` layout with only the right panel changed, so the spaces sidebar, agents list,
-pane cards and status bar are the ones you already know.
+It is Herdr's own `main` layout with the right panel changed and one addition to the spaces sidebar (below), so the
+agents list, pane cards and status bar are the ones you already know.
 
 This repo is also a backup: every mod is in `mods/`, so a fresh install needs nothing but this repo.
 
@@ -75,7 +75,7 @@ understood, `.m` is treated as Objective-C (MATLAB shares it) and `.pl` as Perl 
 
 ## Requirements
 
-- Herdr **0.1.13** or later (`herdr-app` on `PATH`).
+- Herdr **0.1.13** or later (`herdr-app` on `PATH`). `my-spaces` is a copy of 0.1.15's `spaces` and has not been tried on 0.1.13.
 - `git`, and `sh` for the installer.
 - [`git-graph`](https://github.com/mlange-42/git-graph) for the Graph tab: `cargo install git-graph`.
   The mod also looks in `~/.cargo/bin` and `~/.asdf/installs/rust/*/bin`, because Herdr starts programs
@@ -101,7 +101,7 @@ Options:
 - `--update`: replace what is already installed. Old copies are moved to
   `~/.config/herdr-app/.backups/herdr-layout-<time>/`, never deleted. Without it the installer refuses to
   overwrite anything.
-- `--own-only`: install only Files, Changes, Graph and the tab bar; skip Activity, Context, History and
+- `--own-only`: install only Files, Changes, Graph, the tab bar and the spaces list; skip Activity, Context, History and
   the Markdown pane.
 - `--hooks`: also install the agent hooks that feed Activity and Context. **Off by default**: it edits
   `~/.claude/settings.json` (and `~/.codex/hooks.json`, if Codex is installed) and runs `python3` on agent
@@ -124,6 +124,7 @@ All of it is in this repo, under `mods/`. Nothing is downloaded.
 | `my-files` | clone of Herdr's `files` 0.1.13, plus highlighting, diff view and Markdown (mine) |
 | `my-changes` | clone of Herdr's `changes` 0.1.13, plus highlighting (mine) |
 | `my-graph` | new (mine) |
+| `my-spaces` | clone of Herdr's `spaces` 0.1.15, plus an agent icon after a space's name for each tab that runs an agent (mine) |
 | `my-tabs` | clone of Herdr's `tabs` 0.1.13, plus the Graph, Activity, Context and History buttons (mine) |
 | `bettr-activity`, `bettr-context`, `bettr-reporter` | [dissimulate/bettr](https://github.com/dissimulate/bettr); `bettr-context` and `bettr-reporter` have local additions for Pi and opencode, see [THIRD_PARTY.md](THIRD_PARTY.md) |
 | `history`, `md-preview` | [plutotw/herdr-main-usage](https://github.com/plutotw/herdr-main-usage); `history` has a small patch |
@@ -149,9 +150,17 @@ open in your browser through `xdg-open` / `open`.
 
 ## Layout
 
-`layouts/my-layout.json` is Herdr's `main` layout with the right panel changed: `tabs` → `my-tabs`, and
+`layouts/my-layout.json` is Herdr's `main` layout with the right panel changed: `tabs` → `my-tabs`, `spaces` →
+`my-spaces`, and
 the panel's `panel-body` stack has six children in this order: `files`, `changes`, `graph`, `activity`,
 `context`, `history`. Everything else is stock, so it follows Herdr's theme and your `settings.json`.
+
+**Agents in the spaces list.** After a space's name there is one small icon for each of its tabs that runs an agent
+(up to three, then `+N`). A dot on the icon shows what needs you, in the theme's working, blocked and done colours
+(done: finished while you were away); an agent that reports idle is dimmed. Hover names the agent and its tab. A tab with
+two agents shows the first. A space with no icon has no
+agent running. Agents are Herdr's program table (`new-menu.agents`), so opencode counts although it never reports a
+status; such an agent has no dot and is not dimmed, as nothing says whether it is busy. The narrow icon-only sidebar is unchanged.
 Per-space panel memory comes from the stock tab bar logic, so each space reopens its own panel.
 
 ## Backing up changes
@@ -174,6 +183,7 @@ node mods/my-changes/highlight.test.mjs   # tokenizer, diff rows, truncation, CR
 node mods/my-files/files.test.mjs         # Markdown link resolution
 node mods/my-changes/groups.test.mjs       # change tags, numstat merge, unpushed files
 node mods/my-files/rollup.test.mjs        # folder marks and +/- totals
+node mods/my-spaces/agents.test.mjs       # which tab runs which agent
 node mods/my-graph/graph.test.mjs         # ANSI colours, branch parsing, git-graph arguments
 node mods/my-changes/search.test.mjs      # matching, fuzzy names, rg/grep scripts (run with and without ripgrep)
 (cd mods/bettr-reporter && python3 -m unittest test_pull test_redaction_patch)   # Pi and opencode context, redaction
@@ -205,7 +215,7 @@ Run `herdr-app check mods/<name>` after any change; `herdr-app status` should sh
 
 ## Licence
 
-The code in `mods/my-*` and `scripts/` is MIT (see `LICENSE`). `my-files`, `my-changes` and `my-tabs`
+The code in `mods/my-*` and `scripts/` is MIT (see `LICENSE`). `my-files`, `my-changes`, `my-tabs` and `my-spaces`
 are derived from Herdr's shipped mods and keep whatever terms those carry. The other mods are other
 people's work, copied with credit and no licence grant from their authors: see
 [THIRD_PARTY.md](THIRD_PARTY.md).

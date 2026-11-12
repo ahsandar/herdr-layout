@@ -6,7 +6,7 @@
 #
 #   --update     replace mods and the layout that are already installed (the old ones are moved to
 #                <home>/.backups/herdr-layout-<time>/, never deleted)
-#   --own-only   install only Files, Changes, Graph and the tab bar; skip Activity, Context, History
+#   --own-only   install only Files, Changes, Graph, the tab bar and the spaces list; skip Activity, Context, History
 #                and the Markdown pane
 #   --hooks      also install the agent hooks that feed Activity and Context. This edits
 #                ~/.claude/settings.json (and ~/.codex/hooks.json); off unless you ask.
@@ -14,7 +14,7 @@
 # HERDR_APP_HOME overrides the config folder. herdr-app on PATH is used to check each mod.
 set -eu
 
-OWN_MODS="my-files my-changes my-graph my-tabs"
+OWN_MODS="my-files my-changes my-graph my-tabs my-spaces"
 MORE_MODS="bettr-activity bettr-context bettr-reporter history md-preview"
 LAYOUT=my-layout
 

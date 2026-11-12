@@ -15,7 +15,7 @@ Icons: `activity.svg`, `gauge.svg` and the icons in `bettr-activity/icons` and `
 from [Lucide](https://lucide.dev), ISC licence (`LICENSE-Lucide.txt` sits beside them).
 
 Derived from Herdr's own mods: `my-files`, `my-changes` and `my-tabs` started as clones (`mod.clone`) of
-Herdr 0.1.13's `files`, `changes` and `tabs`, and `layouts/my-layout.json` as a clone of `main`.
+Herdr 0.1.13's `files`, `changes` and `tabs`, `my-spaces` is a copy of 0.1.15's `spaces`, and `layouts/my-layout.json` as a clone of `main`.
 
 If you are an author of one of these projects and want a copy removed or a licence line added, open an
 issue on this repo.
